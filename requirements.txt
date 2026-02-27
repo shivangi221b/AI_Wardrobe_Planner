@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+
+numpy
+opencv-python-headless
+scikit-learn
+
+torch
+ultralytics
+open-clip-torch
+

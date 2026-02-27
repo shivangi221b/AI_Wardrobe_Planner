@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+
+outputs/
+vision/models/
+yolov8n.pt
+
+.DS_Store
