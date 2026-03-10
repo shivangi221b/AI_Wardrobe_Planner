@@ -186,7 +186,7 @@ export function WeeklyPlanScreen({
                   const pieceAnim = pieceAnimations[index];
                   return (
                     <Animated.View
-                      key={piece.name}
+                      key={`${piece.name}-${index}`}
                       style={[
                         styles.pieceCard,
                         {
