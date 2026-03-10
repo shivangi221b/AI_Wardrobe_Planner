@@ -10,14 +10,14 @@ from pydantic import BaseModel
 
 from .models import GarmentItem, MediaIngestionJob, MediaIngestionStatus, MediaType
 from .routers import recommendations, weather_router
-from .storage import _wardrobes
+from .storage import get_wardrobe
 
 app = FastAPI(title="AI Wardrobe Planner API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -73,5 +73,5 @@ def get_media_ingestion_job(job_id: str) -> MediaIngestionJob:
 
 
 @app.get("/wardrobe/{user_id}", response_model=List[GarmentItem])
-def get_wardrobe(user_id: str) -> List[GarmentItem]:
-    return _wardrobes.get(user_id, [])
+def get_wardrobe_endpoint(user_id: str) -> List[GarmentItem]:
+    return get_wardrobe(user_id)

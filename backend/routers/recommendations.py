@@ -11,7 +11,7 @@ comments so that adding weather-awareness later requires only:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from ..models import (
     DayOutfitSuggestion,
@@ -19,7 +19,7 @@ from ..models import (
     WeekRecommendationResponse,
 )
 from ..recommendation import generate_week_recommendations
-from ..storage import _wardrobes, _week_events
+from ..storage import get_wardrobe, store_week_events
 
 # Future import — un-comment once weather integration is ready:
 # from ..weather import WeatherContext, get_weather
@@ -52,19 +52,20 @@ async def recommend_week(
     }
     ```
 
-    The optional ``location`` and ``datetime`` fields on each event are accepted
-    and stored but are not yet used by the rules engine.  They will be forwarded
-    to the weather service once that is integrated.
+    Incoming events are persisted to the week-events store so that the user's
+    plan is available to future endpoints (e.g. weather integration).  The
+    optional ``location`` and ``datetime`` fields are stored but not yet used
+    by the rules engine; they will be forwarded to the weather service once
+    that is integrated.
 
-    Returns 404 if the ``user_id`` is completely unknown (absent from both the
-    wardrobe store and the week-events store).  An empty wardrobe is valid and
-    returns graceful "No item found" recommendations.
+    An empty or unknown wardrobe is valid — recommendations are returned with
+    ``"No item found"`` entries rather than an error.
     """
-    user_known = request.user_id in _wardrobes or request.user_id in _week_events
-    if not user_known:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Persist the submitted week plan so the user is registered in storage
+    # and the events are available for future weather / analytics lookups.
+    store_week_events(request.user_id, request.events)
 
-    wardrobe = _wardrobes.get(request.user_id, [])
+    wardrobe = get_wardrobe(request.user_id)
 
     # Future: fetch weather per event and pass WeatherContext into the engine.
     # for event in request.events:
