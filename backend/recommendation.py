@@ -172,12 +172,12 @@ def generate_week_recommendations(
         bottom = _pick_garment(wardrobe, _is_bottom, preferred, used_ids)
 
         top_id = top.id if top else None
-        top_name = top.sub_category or top.category.value if top else None
+        top_name = (top.sub_category or top.category.value) if top else None
         if top and top.brand:
             top_name = f"{top.brand} {top_name}"
 
         bottom_id = bottom.id if bottom else None
-        bottom_name = bottom.sub_category or bottom.category.value if bottom else None
+        bottom_name = (bottom.sub_category or bottom.category.value) if bottom else None
         if bottom and bottom.brand:
             bottom_name = f"{bottom.brand} {bottom_name}"
 
