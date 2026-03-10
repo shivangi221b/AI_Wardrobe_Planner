@@ -24,8 +24,14 @@ export const API_BASE_URL = (
   env?.EXPO_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL
 ).replace(/\/$/, '');
 
-export const USE_MOCK_API = env?.EXPO_PUBLIC_USE_MOCK_API !== 'false';
+const useMockApi =
+  env?.EXPO_PUBLIC_USE_MOCK_API === 'true'
+    ? true
+    : env?.EXPO_PUBLIC_USE_MOCK_API === 'false'
+      ? false
+      : __DEV__;
 
+export const USE_MOCK_API = useMockApi;
 const validEventTypes: EventType[] = [
   'work_meeting',
   'date_night',
