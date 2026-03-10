@@ -5,12 +5,22 @@ from typing import List
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .models import GarmentItem, MediaIngestionJob, MediaIngestionStatus, MediaType
 from .routers import recommendations, weather_router
+from .storage import _wardrobes
 
 app = FastAPI(title="AI Wardrobe Planner API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(recommendations.router)
 app.include_router(weather_router.router)
@@ -27,9 +37,8 @@ class MediaIngestionResponse(BaseModel):
     status: MediaIngestionStatus
 
 
-# In-memory stores for early prototyping; replace with database in real deployment.
+# In-memory store for ingestion jobs; replace with a real database in production.
 _jobs: dict[str, MediaIngestionJob] = {}
-_wardrobes: dict[str, List[GarmentItem]] = {}
 
 
 @app.post("/media-ingestion", response_model=MediaIngestionResponse)
@@ -50,7 +59,7 @@ def create_media_ingestion_job(request: MediaIngestionRequest) -> MediaIngestion
     _jobs[job_id] = job
 
     # A separate worker service will pick up this job and update its status and
-    # populate the user's wardrobe.
+    # populate the user's wardrobe via _wardrobes in storage.py.
 
     return MediaIngestionResponse(job_id=job_id, status=job.status)
 
@@ -66,4 +75,3 @@ def get_media_ingestion_job(job_id: str) -> MediaIngestionJob:
 @app.get("/wardrobe/{user_id}", response_model=List[GarmentItem])
 def get_wardrobe(user_id: str) -> List[GarmentItem]:
     return _wardrobes.get(user_id, [])
-

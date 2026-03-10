@@ -137,16 +137,19 @@ class WeekRecommendationRequest(BaseModel):
 
 
 class DayOutfitSuggestion(BaseModel):
-    """Outfit suggestion for a single day."""
+    """Structured outfit recommendation for a single day."""
 
     day: str
     event_type: str
-    suggestion: str
+    top_id: Optional[str] = None
+    bottom_id: Optional[str] = None
+    top_name: Optional[str] = None
+    bottom_name: Optional[str] = None
+    explanation: str
 
 
 class WeekRecommendationResponse(BaseModel):
     """Response body for ``POST /recommendations/week``."""
 
-    user_id: str
-    suggestions: List[DayOutfitSuggestion]
+    recommendations: List[DayOutfitSuggestion]
 
