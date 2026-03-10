@@ -151,5 +151,6 @@ class DayOutfitSuggestion(BaseModel):
 class WeekRecommendationResponse(BaseModel):
     """Response body for ``POST /recommendations/week``."""
 
+    user_id: str
     recommendations: List[DayOutfitSuggestion]
 

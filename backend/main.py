@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import List
 from uuid import uuid4
@@ -14,9 +15,16 @@ from .storage import get_wardrobe
 
 app = FastAPI(title="AI Wardrobe Planner API", version="0.1.0")
 
+# Origins are driven by the ALLOWED_ORIGINS environment variable so the same
+# binary can serve local dev and staging without code changes.
+# Set ALLOWED_ORIGINS to a comma-separated list of trusted origins in production.
+# Example: ALLOWED_ORIGINS="https://app.misfitai.com,https://staging.misfitai.com"
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8081,http://localhost:3000")
+_allowed_origins: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,8 +66,8 @@ def create_media_ingestion_job(request: MediaIngestionRequest) -> MediaIngestion
     )
     _jobs[job_id] = job
 
-    # A separate worker service will pick up this job and update its status and
-    # populate the user's wardrobe via _wardrobes in storage.py.
+    # A separate worker service will pick up this job, update its status, and
+    # populate the user's wardrobe via storage.add_garments(user_id, items).
 
     return MediaIngestionResponse(job_id=job_id, status=job.status)
 

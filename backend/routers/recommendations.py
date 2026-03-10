@@ -79,4 +79,7 @@ async def recommend_week(
         wardrobe, request.events
     )
 
-    return WeekRecommendationResponse(recommendations=day_recommendations)
+    return WeekRecommendationResponse(
+        user_id=request.user_id,
+        recommendations=day_recommendations,
+    )
