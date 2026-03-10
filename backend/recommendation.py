@@ -151,7 +151,7 @@ def generate_week_recommendations(
     events: list[WeekEvent],
 ) -> list[DayOutfitSuggestion]:
     """
-    Generate one :class:`DayRecommendation` per event in *events*.
+    Generate one :class:`DayOutfitSuggestion` per event in *events*.
 
     Args:
         wardrobe: All garments belonging to the user. May be empty.
