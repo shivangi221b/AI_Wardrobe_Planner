@@ -99,3 +99,54 @@ class MediaIngestionJob(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
+# ---------------------------------------------------------------------------
+# Weekly outfit recommendation models
+# ---------------------------------------------------------------------------
+
+
+class WeekEvent(BaseModel):
+    """
+    A single calendar event for one day of the week.
+
+    ``location`` and ``datetime`` are optional hooks for future weather/
+    location-aware recommendations.  Omitting them keeps the payload
+    identical to today's schema so no existing callers break.
+    """
+
+    day: str
+    """Day of the week, e.g. ``"Monday"``."""
+
+    event_type: str
+    """Informal label for the event, e.g. ``"work"``, ``"gym"``, ``"date"``."""
+
+    location: Optional[str] = None
+    """Free-text location string, e.g. ``"New York, NY"``.
+    Will be forwarded to the weather service once it is integrated."""
+
+    datetime: Optional[datetime] = None
+    """ISO 8601 datetime for the event.  Used together with ``location`` to
+    fetch a point-in-time weather forecast."""
+
+
+class WeekRecommendationRequest(BaseModel):
+    """Request body for ``POST /recommendations/week``."""
+
+    user_id: str
+    events: List[WeekEvent]
+
+
+class DayOutfitSuggestion(BaseModel):
+    """Outfit suggestion for a single day."""
+
+    day: str
+    event_type: str
+    suggestion: str
+
+
+class WeekRecommendationResponse(BaseModel):
+    """Response body for ``POST /recommendations/week``."""
+
+    user_id: str
+    suggestions: List[DayOutfitSuggestion]
+

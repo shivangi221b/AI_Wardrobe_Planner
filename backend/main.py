@@ -8,8 +8,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .models import GarmentItem, MediaIngestionJob, MediaIngestionStatus, MediaType
+from .routers import recommendations, weather_router
 
 app = FastAPI(title="AI Wardrobe Planner API", version="0.1.0")
+
+app.include_router(recommendations.router)
+app.include_router(weather_router.router)
 
 
 class MediaIngestionRequest(BaseModel):
