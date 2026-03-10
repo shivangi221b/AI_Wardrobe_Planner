@@ -218,6 +218,11 @@ export function AppStateProvider({
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
+      setCalendarConnected,
+      setEventForDay,
+      useDemoWeek,
+      generateRecommendations,
+      addGarmentToWardrobe,
       addGarmentViaVision,
     ]
   );
