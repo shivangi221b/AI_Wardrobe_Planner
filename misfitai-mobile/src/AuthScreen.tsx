@@ -1,25 +1,67 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  Platform,
   Pressable,
   SafeAreaView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
+import * as Google from 'expo-auth-session/providers/google';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { palette, radius, type } from './theme';
+
+// Native Apple Sign In on iOS; on web/Android the button is shown but sign-in runs only on iOS
+const AppleAuthentication =
+  Platform.OS === 'ios' ? require('expo-apple-authentication') : null;
+
+WebBrowser.maybeCompleteAuthSession();
 
 export type AuthMode = 'login' | 'signup';
 export type AuthProvider = 'apple' | 'google';
 
+/** Profile we collect from Google (People API) or Apple. Used for styling and DB user identity. */
+export type UserProfile = {
+  /** Stable provider user id (e.g. Google people/xxx or Apple credential.user). Used as user_id in API. */
+  id?: string | null;
+  email?: string | null;
+  displayName?: string | null;
+  photoUrl?: string | null;
+  /** Google/Apple may not provide; user can set in app later. */
+  gender?: 'male' | 'female' | 'other' | null;
+  /** Birthday from Google People API (YYYY-MM-DD) if available and shared. */
+  birthday?: string | null;
+};
+
+/** Scopes we request from Google: name, email, photo, gender, birthday. */
+const GOOGLE_SCOPES = [
+  'openid',
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/user.gender.read',
+  'https://www.googleapis.com/auth/user.birthday.read',
+];
+
+const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
+const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
+
 export function AuthScreen({
   onAuthenticated,
 }: {
-  onAuthenticated: (provider: AuthProvider, mode: AuthMode) => void;
+  onAuthenticated: (provider: AuthProvider, mode: AuthMode, profile?: UserProfile) => void;
 }) {
   const [mode, setMode] = useState<AuthMode>('login');
   const [loadingProvider, setLoadingProvider] = useState<AuthProvider | null>(null);
+
+  const [googleRequest, googleResponse, googlePromptAsync] = Google.useAuthRequest({
+    ...(googleWebClientId && { webClientId: googleWebClientId }),
+    ...(googleIosClientId && { iosClientId: googleIosClientId }),
+    ...(googleAndroidClientId && { androidClientId: googleAndroidClientId }),
+    scopes: GOOGLE_SCOPES,
+  });
 
   const entrance = useRef(new Animated.Value(0)).current;
 
@@ -31,13 +73,123 @@ export function AuthScreen({
     }).start();
   }, [entrance]);
 
-  const handleAuth = (provider: AuthProvider) => {
-    setLoadingProvider(provider);
-    setTimeout(() => {
+  const fetchGoogleProfile = useCallback(async (accessToken: string): Promise<UserProfile> => {
+    const personFields = 'genders,birthdays,names,emailAddresses,photos';
+    const res = await fetch(
+      `https://people.googleapis.com/v1/people/me?personFields=${personFields}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) return {};
+    const data = (await res.json()) as {
+      resourceName?: string;
+      genders?: Array<{ value?: string }>;
+      birthdays?: Array<{ date?: { year?: number; month?: number; day?: number } }>;
+      names?: Array<{ displayName?: string }>;
+      emailAddresses?: Array<{ value?: string }>;
+      photos?: Array<{ url?: string }>;
+    };
+    const resourceName = data.resourceName;
+    const id = resourceName
+      ? `google-${resourceName.replace(/^people\//, '')}`
+      : null;
+    const genderRaw = data.genders?.[0]?.value;
+    const gender =
+      genderRaw === 'male' || genderRaw === 'female' || genderRaw === 'other'
+        ? genderRaw
+        : null;
+    const b = data.birthdays?.[0]?.date;
+    const birthday =
+      b && b.year != null && b.month != null && b.day != null
+        ? `${b.year}-${String(b.month).padStart(2, '0')}-${String(b.day).padStart(2, '0')}`
+        : null;
+    return {
+      id,
+      email: data.emailAddresses?.[0]?.value ?? null,
+      displayName: data.names?.[0]?.displayName ?? null,
+      photoUrl: data.photos?.[0]?.url ?? null,
+      gender,
+      birthday,
+    };
+  }, []);
+
+  useEffect(() => {
+    if (googleResponse?.type !== 'success') {
+      if (googleResponse?.type === 'error' || googleResponse?.type === 'dismiss') {
+        setLoadingProvider(null);
+      }
+      return;
+    }
+    const accessToken =
+      googleResponse.authentication?.accessToken ?? googleResponse.params?.access_token;
+    if (!accessToken) {
       setLoadingProvider(null);
-      onAuthenticated(provider, mode);
-    }, 700);
-  };
+      onAuthenticated('google', mode);
+      return;
+    }
+    let cancelled = false;
+    fetchGoogleProfile(accessToken).then(
+      (profile) => {
+        if (!cancelled) {
+          setLoadingProvider(null);
+          onAuthenticated('google', mode, profile);
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setLoadingProvider(null);
+          onAuthenticated('google', mode);
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [googleResponse, mode, onAuthenticated, fetchGoogleProfile]);
+
+  const handleAppleAuth = useCallback(async () => {
+    if (!AppleAuthentication) return;
+    try {
+      setLoadingProvider('apple');
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      if (credential) {
+        const profile: UserProfile = {
+          id: credential.user ? `apple-${credential.user}` : null,
+          email: credential.email ?? null,
+          displayName:
+            credential.fullName?.givenName || credential.fullName?.familyName
+              ? [credential.fullName.givenName, credential.fullName.familyName].filter(Boolean).join(' ')
+              : null,
+          photoUrl: null,
+          gender: null,
+          birthday: null,
+        };
+        onAuthenticated('apple', mode, profile);
+      }
+    } catch (error: unknown) {
+      const err = error as Error & { code?: string };
+      if (err?.code !== 'ERR_CANCELED') {
+        console.warn('Apple sign-in failed', err);
+      }
+    } finally {
+      setLoadingProvider(null);
+    }
+  }, [mode, onAuthenticated]);
+
+  const handleGoogleAuth = useCallback(async () => {
+    try {
+      setLoadingProvider('google');
+      await googlePromptAsync();
+    } catch (error) {
+      console.warn('Google sign-in failed', error);
+      setLoadingProvider(null);
+    }
+  }, [googlePromptAsync]);
 
   const animatedStyle = {
     opacity: entrance,
@@ -88,7 +240,7 @@ export function AuthScreen({
 
         <View style={styles.authCard}>
           <Pressable
-            onPress={() => handleAuth('apple')}
+            onPress={handleAppleAuth}
             disabled={loadingProvider !== null}
             style={[styles.providerButton, styles.providerButtonPrimary]}
           >
@@ -98,18 +250,16 @@ export function AuthScreen({
           </Pressable>
 
           <Pressable
-            onPress={() => handleAuth('google')}
-            disabled={loadingProvider !== null}
+            onPress={handleGoogleAuth}
+            disabled={loadingProvider !== null || !googleRequest}
             style={styles.providerButton}
           >
             <Text style={styles.providerButtonText}>
-              {loadingProvider === 'google' ? 'Connecting Google...' : 'Continue with Google'}
+              {loadingProvider === 'google'
+                ? 'Connecting Google...'
+                : 'Continue with Google'}
             </Text>
           </Pressable>
-
-          <Text style={styles.helperCopy}>
-            Mock auth for MVP demo. Real OAuth can replace this screen later.
-          </Text>
         </View>
       </Animated.View>
     </SafeAreaView>
@@ -206,12 +356,5 @@ const styles = StyleSheet.create({
     color: '#f4f4f2',
     fontSize: 14,
     fontFamily: type.bodyDemi,
-  },
-  helperCopy: {
-    marginTop: 8,
-    color: palette.muted,
-    fontSize: 12,
-    lineHeight: 18,
-    fontFamily: type.body,
   },
 });

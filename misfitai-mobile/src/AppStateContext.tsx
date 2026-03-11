@@ -81,8 +81,11 @@ function createInitialEvents(): Record<DayOfWeek, EventType> {
 
 export function AppStateProvider({
   children,
+  userId: userIdProp,
 }: {
   children: React.ReactNode;
+  /** Stable user id from auth (e.g. Google/Apple id or email). Used for wardrobe API and Supabase. */
+  userId?: string;
 }) {
   const [garments, setGarments] = useState<Garment[]>([]);
   const [isCalendarConnected, setIsCalendarConnected] = useState(false);
@@ -93,7 +96,7 @@ export function AppStateProvider({
   >([]);
   const [isLoadingWardrobe, setIsLoadingWardrobe] = useState(false);
   const [wardrobeError, setWardrobeError] = useState<string | null>(null);
-  const [userId] = useState(() => `demo-${Math.random().toString(36).slice(2, 8)}`);
+  const userId = userIdProp ?? `demo-${Math.random().toString(36).slice(2, 8)}`;
 
   useEffect(() => {
     let cancelled = false;
