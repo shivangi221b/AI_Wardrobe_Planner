@@ -84,6 +84,7 @@ function AppContent({
             onRegenerateWeek={async () => {
               await generateRecommendations();
             }}
+            onNavigateToWardrobe={() => setTab('wardrobe')}
           />
         ) : null}
       </View>
