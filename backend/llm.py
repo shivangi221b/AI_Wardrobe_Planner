@@ -8,7 +8,7 @@ base64 data so the REST endpoint can process them without GCS.
 
 Environment variables
 ---------------------
-VERTEX_AI_API_KEY   Required. Raises at import time if absent.
+VERTEXAI_API_KEY   Required. Raises at import time if absent.
 VERTEX_AI_MODEL     Optional. Defaults to "gemini-3.1-pro-preview".
 """
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-_api_key = os.getenv("VERTEX_AI_API_KEY")
+_api_key = os.getenv("VERTEXAI_API_KEY")
 if not _api_key:
     raise EnvironmentError(
         "VERTEX_AI_API_KEY environment variable is not set. "
