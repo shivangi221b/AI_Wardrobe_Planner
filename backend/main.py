@@ -2,16 +2,39 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import List
+import logging
+import os
+from pathlib import Path
+from typing import List, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from pydantic import HttpUrl
+from starlette.concurrency import run_in_threadpool
 
-from .models import GarmentItem, MediaIngestionJob, MediaIngestionStatus, MediaType
+from vision.extractor import extract_garments_from_image
+
+from .db import get_wardrobe as get_wardrobe_items
+from .db import insert_garment
+from .models import (
+    GarmentCategory,
+    GarmentFormality,
+    GarmentItem,
+    GarmentSeasonality,
+    MediaIngestionJob,
+    MediaIngestionStatus,
+    MediaType,
+)
 from .routers import recommendations, weather_router
 from .storage import get_wardrobe
+from .storage import upload_garment_image
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AI Wardrobe Planner API", version="0.1.0")
 
@@ -29,9 +52,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8081",
+        "http://127.0.0.1:8081",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(recommendations.router)
 app.include_router(weather_router.router)
+
+_local_assets_dir = Path(os.getenv("LOCAL_GARMENTS_DIR", "outputs/local_garments"))
+_local_assets_dir.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/assets/local-garments",
+    StaticFiles(directory=str(_local_assets_dir)),
+    name="local-garments",
+)
 
 
 class MediaIngestionRequest(BaseModel):
@@ -45,7 +86,55 @@ class MediaIngestionResponse(BaseModel):
     status: MediaIngestionStatus
 
 
-# In-memory store for ingestion jobs; replace with a real database in production.
+class AddGarmentRequest(BaseModel):
+    name: str
+    category: GarmentCategory
+    color: Optional[str] = None
+    formality: Optional[GarmentFormality] = None
+    primary_image_url: HttpUrl
+
+
+class SearchGarmentRequest(BaseModel):
+    query: str
+    limit: int = 8
+    color: Optional[str] = None
+    material: Optional[str] = None
+    kind: Optional[str] = None
+    gender: Optional[str] = None
+
+
+class SearchGarmentResult(BaseModel):
+    image_url: str
+    title: Optional[str] = None
+    source_url: Optional[str] = None
+
+
+def _safe_category(value: str) -> GarmentCategory:
+    try:
+        return GarmentCategory(value)
+    except Exception:
+        return GarmentCategory.TOP
+
+
+def _safe_formality(value: Optional[str]) -> Optional[GarmentFormality]:
+    if not value:
+        return None
+    try:
+        return GarmentFormality(value)
+    except Exception:
+        return None
+
+
+def _safe_seasonality(value: Optional[str]) -> Optional[GarmentSeasonality]:
+    if not value:
+        return None
+    try:
+        return GarmentSeasonality(value)
+    except Exception:
+        return None
+
+
+# Keep ingestion jobs in-memory for now; wardrobe lives in Supabase.
 _jobs: dict[str, MediaIngestionJob] = {}
 
 

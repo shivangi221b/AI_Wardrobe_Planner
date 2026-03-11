@@ -94,16 +94,36 @@ interface RecommendationApi {
 
 export interface AddGarmentPayload {
   name: string;
-  category: 'top' | 'bottom';
+  category: 'top' | 'bottom' | 'shoes' | 'accessory';
   color?: string;
   formality?: GarmentFormality;
   primaryImageUrl?: string;
 }
 
-export type VisionSampleKey = 'sweater' | 'trousers' | 'coat' | 'loafers';
-
 export interface VisionAddPayload {
-  sampleKey: VisionSampleKey;
+  imageUri: string;
+  fileName?: string;
+  mimeType?: string;
+}
+
+export interface GarmentSearchResult {
+  imageUrl: string;
+  title?: string | null;
+  sourceUrl?: string | null;
+}
+
+export interface GarmentSearchOptions {
+  color?: string;
+  material?: string;
+  kind?: string;
+  gender?: 'men' | 'women' | 'any';
+}
+export interface ConfirmSearchAddPayload {
+  name: string;
+  category: 'top' | 'bottom' | 'shoes' | 'accessory';
+  color?: string;
+  formality?: GarmentFormality;
+  imageUrl: string;
 }
 
 export interface WeekEventsRequest {
@@ -127,6 +147,21 @@ export class ApiError extends Error {
 
 export function isApiError(error: unknown): error is ApiError {
   return error instanceof ApiError;
+}
+
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (!isApiError(error)) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(error.body) as { detail?: string };
+    if (parsed?.detail && parsed.detail.trim()) {
+      return parsed.detail.trim();
+    }
+  } catch {
+    // Keep original fallback if body is plain text/non-JSON.
+  }
+  return `${fallback} (${error.status})`;
 }
 
 function normalizeFormality(value?: string | null): GarmentFormality {
@@ -236,41 +271,6 @@ function mapRecommendation(rec: RecommendationApi, index: number): DayRecommenda
 const mockWardrobes: Record<string, Garment[]> = {};
 const mockWeekEvents: Record<string, WeekEventsRequest['events']> = {};
 let mockGarmentCounter = 100;
-
-const visionTemplates: Record<
-  VisionSampleKey,
-  {
-    name: string;
-    category: 'top' | 'bottom';
-    color: string;
-    formality: GarmentFormality;
-  }
-> = {
-  sweater: {
-    name: 'Cream sweater',
-    category: 'top',
-    color: 'cream',
-    formality: 'smart_casual',
-  },
-  trousers: {
-    name: 'Dark trousers',
-    category: 'bottom',
-    color: 'brown',
-    formality: 'business',
-  },
-  coat: {
-    name: 'Beige coat',
-    category: 'top',
-    color: 'beige',
-    formality: 'business',
-  },
-  loafers: {
-    name: 'Brown loafers',
-    category: 'bottom',
-    color: 'brown',
-    formality: 'smart_casual',
-  },
-};
 
 function createSeedWardrobe(userId: string): Garment[] {
   return [
@@ -397,15 +397,26 @@ async function mockAddGarment(
 
 async function mockAddGarmentFromVision(
   userId: string,
-  payload: VisionAddPayload
+  _payload: VisionAddPayload
 ): Promise<Garment> {
-  const template = visionTemplates[payload.sampleKey];
   return mockAddGarment(userId, {
-    name: template.name,
-    category: template.category,
-    color: template.color,
-    formality: template.formality,
+    name: 'Vision garment',
+    category: 'top',
+    color: 'neutral',
+    formality: 'casual',
   });
+}
+
+async function mockSearchGarmentImages(_userId: string, query: string): Promise<GarmentSearchResult[]> {
+  const q = query.trim();
+  if (!q) return [];
+  return [
+    {
+      imageUrl: 'https://example.com/mock-garment-1.jpg',
+      title: `Mock result: ${q}`,
+      sourceUrl: 'https://example.com',
+    },
+  ];
 }
 
 async function mockSaveWeekEvents(
@@ -468,7 +479,9 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       Accept: 'application/json',
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init?.body && !(init.body instanceof FormData)
+        ? { 'Content-Type': 'application/json' }
+        : {}),
       ...(init?.headers || {}),
     },
   });
@@ -530,16 +543,88 @@ export async function addGarment(
 export async function addGarmentFromVision(
   userId: string,
   payload: VisionAddPayload
-): Promise<Garment> {
+): Promise<Garment[]> {
   if (USE_MOCK_API) {
-    return mockAddGarmentFromVision(userId, payload);
+    return [await mockAddGarmentFromVision(userId, payload)];
   }
 
-  throw new ApiError(
-    'Vision upload is not implemented yet. Per mvp_doc optional flow, backend should expose POST /upload multipart(file,user_id).',
-    501,
-    ''
+  const fileResponse = await fetch(payload.imageUri);
+  const blob = await fileResponse.blob();
+
+  const formData = new FormData();
+  formData.append('user_id', userId);
+  formData.append(
+    'file',
+    blob,
+    payload.fileName || `wardrobe-upload-${Date.now()}.jpg`
   );
+
+  const response = await requestJson<WardrobeApiItem[]>(
+    '/vision/extract',
+    {
+      method: 'POST',
+      body: formData,
+    }
+  );
+  if (!Array.isArray(response)) {
+    return [];
+  }
+  return response.map(mapGarment);
+}
+
+export async function searchGarmentImages(
+  userId: string,
+  query: string,
+  limit = 20,
+  options?: GarmentSearchOptions
+): Promise<GarmentSearchResult[]> {
+  if (USE_MOCK_API) {
+    return mockSearchGarmentImages(userId, query);
+  }
+
+  const response = await requestJson<
+    {
+      image_url?: string;
+      title?: string | null;
+      source_url?: string | null;
+    }[]
+  >(`/wardrobe/${encodeURIComponent(userId)}/search-garment`, {
+    method: 'POST',
+    body: JSON.stringify({
+      query,
+      limit,
+      color: options?.color,
+      material: options?.material,
+      kind: options?.kind,
+      gender:
+        options?.gender && options.gender !== 'any' ? options.gender : undefined,
+    }),
+  });
+
+  if (!Array.isArray(response)) {
+    return [];
+  }
+
+  return response
+    .map((item) => ({
+      imageUrl: item.image_url || '',
+      title: item.title,
+      sourceUrl: item.source_url,
+    }))
+    .filter((item) => Boolean(item.imageUrl));
+}
+
+export async function confirmSearchAdd(
+  userId: string,
+  payload: ConfirmSearchAddPayload
+): Promise<Garment> {
+  return addGarment(userId, {
+    name: payload.name,
+    category: payload.category,
+    color: payload.color,
+    formality: payload.formality,
+    primaryImageUrl: payload.imageUrl,
+  });
 }
 
 export async function saveWeekEvents(

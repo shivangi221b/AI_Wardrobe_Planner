@@ -1,5 +1,6 @@
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -16,10 +17,16 @@ import { dayOrder } from './constants';
 import {
   addGarment,
   addGarmentFromVision,
+  confirmSearchAdd,
+  getApiErrorMessage,
   getWardrobe,
   getWeekEvents,
   getWeeklyRecommendations,
-  type VisionSampleKey,
+  searchGarmentImages,
+  type ConfirmSearchAddPayload,
+  type GarmentSearchResult,
+  type GarmentSearchOptions,
+  type VisionAddPayload,
   saveWeekEvents,
 } from './api';
 
@@ -30,6 +37,11 @@ interface AppState {
   isCalendarConnected: boolean;
   isLoadingWardrobe: boolean;
   wardrobeError: string | null;
+  searchGarmentCandidates: (
+    query: string,
+    limit?: number,
+    options?: GarmentSearchOptions
+  ) => Promise<GarmentSearchResult[]>;
   setCalendarConnected: (connected: boolean) => void;
   setEventForDay: (day: DayOfWeek, eventType: EventType) => void;
   useDemoWeek: () => void;
@@ -37,12 +49,13 @@ interface AppState {
   addGarmentToWardrobe: (
     payload: {
       name: string;
-      category: 'top' | 'bottom';
+      category: 'top' | 'bottom' | 'shoes' | 'accessory';
       color?: string;
       formality?: 'casual' | 'smart_casual' | 'business' | 'formal';
     }
   ) => Promise<void>;
-  addGarmentViaVision: (sampleKey: VisionSampleKey) => Promise<void>;
+  addGarmentViaVision: (payload: VisionAddPayload) => Promise<void>;
+  addGarmentViaSearch: (payload: ConfirmSearchAddPayload) => Promise<void>;
 }
 
 const AppStateContext = createContext<AppState | undefined>(undefined);
@@ -69,8 +82,11 @@ function createInitialEvents(): Record<DayOfWeek, EventType> {
 
 export function AppStateProvider({
   children,
+  userId: userIdProp,
 }: {
   children: React.ReactNode;
+  /** Stable user id from auth (e.g. Google/Apple id or email). Used for wardrobe API and Supabase. */
+  userId?: string;
 }) {
   const [garments, setGarments] = useState<Garment[]>([]);
   const [isCalendarConnected, setIsCalendarConnected] = useState(false);
@@ -81,7 +97,15 @@ export function AppStateProvider({
   >([]);
   const [isLoadingWardrobe, setIsLoadingWardrobe] = useState(false);
   const [wardrobeError, setWardrobeError] = useState<string | null>(null);
-  const [userId] = useState(() => `demo-${Math.random().toString(36).slice(2, 8)}`);
+  const [userId, setUserId] = useState<string>(
+    () => userIdProp ?? `demo-${Math.random().toString(36).slice(2, 8)}`
+  );
+
+  useEffect(() => {
+    if (userIdProp && userIdProp !== userId) {
+      setUserId(userIdProp);
+    }
+  }, [userIdProp, userId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,7 +121,7 @@ export function AppStateProvider({
         }
       } catch (error) {
         if (!cancelled) {
-          setWardrobeError('Failed to load wardrobe.');
+          setWardrobeError(getApiErrorMessage(error, 'Failed to load wardrobe.'));
         }
       }
 
@@ -131,18 +155,18 @@ export function AppStateProvider({
     };
   }, [userId]);
 
-  const setCalendarConnected = (connected: boolean) => {
+  const setCalendarConnected = useCallback((connected: boolean) => {
     setIsCalendarConnected(connected);
-  };
+  }, []);
 
-  const setEventForDay = (day: DayOfWeek, eventType: EventType) => {
+  const setEventForDay = useCallback((day: DayOfWeek, eventType: EventType) => {
     setEventsByDay((current) => ({
       ...current,
       [day]: eventType,
     }));
-  };
+  }, []);
 
-  const useDemoWeek = () => {
+  const useDemoWeek = useCallback(() => {
     setEventsByDay({
       monday: 'work_meeting',
       tuesday: 'work_meeting',
@@ -152,9 +176,9 @@ export function AppStateProvider({
       saturday: 'casual',
       sunday: 'none',
     });
-  };
+  }, []);
 
-  const generateRecommendations = async () => {
+  const generateRecommendations = useCallback(async () => {
     const events: CalendarEvent[] = dayOrder.map((day, index) => ({
       id: 'event-' + index,
       day,
@@ -167,11 +191,11 @@ export function AppStateProvider({
         (a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day)
       )
     );
-  };
+  }, [userId, eventsByDay]);
 
-  const addGarmentToWardrobe = async (payload: {
+  const addGarmentToWardrobe = useCallback(async (payload: {
     name: string;
-    category: 'top' | 'bottom';
+    category: 'top' | 'bottom' | 'shoes' | 'accessory';
     color?: string;
     formality?: 'casual' | 'smart_casual' | 'business' | 'formal';
   }): Promise<void> => {
@@ -183,18 +207,43 @@ export function AppStateProvider({
       }
       return current.map((item) => (item.id === created.id ? created : item));
     });
-  };
+  }, [userId]);
 
-  const addGarmentViaVision = async (sampleKey: VisionSampleKey): Promise<void> => {
-    const created = await addGarmentFromVision(userId, { sampleKey });
+  const addGarmentViaVision = useCallback(async (payload: VisionAddPayload): Promise<void> => {
+    const createdItems = await addGarmentFromVision(userId, payload);
     setGarments((current) => {
-      const existingIndex = current.findIndex((item) => item.id === created.id);
-      if (existingIndex === -1) {
-        return current.concat(created);
-      }
-      return current.map((item) => (item.id === created.id ? created : item));
+      const byId = new Map(current.map((item) => [item.id, item]));
+      createdItems.forEach((item) => {
+        byId.set(item.id, item);
+      });
+      return Array.from(byId.values());
     });
-  };
+  }, [userId]);
+
+  const searchGarmentCandidates = useCallback(
+    async (
+      query: string,
+      limit = 20,
+      options?: GarmentSearchOptions
+    ): Promise<GarmentSearchResult[]> => {
+      return searchGarmentImages(userId, query, limit, options);
+    },
+    [userId]
+  );
+
+  const addGarmentViaSearch = useCallback(
+    async (payload: ConfirmSearchAddPayload): Promise<void> => {
+      const created = await confirmSearchAdd(userId, payload);
+      setGarments((current) => {
+        const existingIndex = current.findIndex((item) => item.id === created.id);
+        if (existingIndex === -1) {
+          return current.concat(created);
+        }
+        return current.map((item) => (item.id === created.id ? created : item));
+      });
+    },
+    [userId]
+  );
 
   const value: AppState = useMemo(
     () => ({
@@ -204,12 +253,14 @@ export function AppStateProvider({
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
+      searchGarmentCandidates,
       setCalendarConnected,
       setEventForDay,
       useDemoWeek,
       generateRecommendations,
       addGarmentToWardrobe,
       addGarmentViaVision,
+      addGarmentViaSearch,
     }),
     [
       garments,
@@ -224,6 +275,8 @@ export function AppStateProvider({
       generateRecommendations,
       addGarmentToWardrobe,
       addGarmentViaVision,
+      searchGarmentCandidates,
+      addGarmentViaSearch,
     ]
   );
 

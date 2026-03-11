@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { AppStateProvider, useAppState } from './src/AppStateContext';
@@ -7,21 +8,36 @@ import { EventsScreen } from './src/EventsScreen';
 import { WeeklyPlanScreen } from './src/WeeklyPlanScreen';
 import { USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
-import { AuthScreen, type AuthMode, type AuthProvider } from './src/AuthScreen';
+import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
 import { palette, radius, type } from './src/theme';
+
+const SESSION_STORAGE_KEY = '@misfitai/session';
 
 type Tab = 'wardrobe' | 'events' | 'plan';
 
-type MockSession = {
+type Session = {
   provider: AuthProvider;
   mode: AuthMode;
+  profile?: UserProfile;
+  /** Stable user id derived at auth-time, used for all API calls. */
+  userId: string;
 };
+
+/** Stable user id for API/Supabase: provider id, or normalized email, or fallback. */
+function deriveUserIdFromProfile(profile?: UserProfile): string {
+  if (profile?.id) return profile.id;
+  if (profile?.email) {
+    const normalizedEmail = profile.email.trim().toLowerCase();
+    return `email-${normalizedEmail.replace(/@/g, '-at-').replace(/\./g, '-dot-')}`;
+  }
+  return `demo-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function AppContent({
   session,
   onSignOut,
 }: {
-  session: MockSession;
+  session: Session;
   onSignOut: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('wardrobe');
@@ -34,7 +50,11 @@ function AppContent({
 
       <View style={styles.metaBar}>
         <View style={styles.metaChip}>
-          <Text style={styles.metaChipText}>{session.provider.toUpperCase()} · {session.mode}</Text>
+          <Text style={styles.metaChipText}>
+            {session.provider.toUpperCase()} · {session.mode}
+            {session.profile?.displayName ? ` · ${session.profile.displayName}` : ''}
+            {session.profile?.gender ? ` · ${session.profile.gender}` : ''}
+          </Text>
         </View>
         <Pressable onPress={onSignOut} style={styles.metaChip}>
           <Text style={styles.metaChipText}>Sign out</Text>
@@ -94,26 +114,57 @@ function AppContent({
 }
 
 export default function App() {
-  const [session, setSession] = useState<MockSession | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [restoring, setRestoring] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(SESSION_STORAGE_KEY)
+      .then((raw) => {
+        if (cancelled) return;
+        try {
+          const parsed = raw ? (JSON.parse(raw) as Session) : null;
+          if (parsed?.provider && parsed?.mode && parsed?.userId) {
+            setSession(parsed);
+          }
+        } catch {
+          // ignore invalid stored session
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRestoring(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleAuthenticated = useCallback(
+    (provider: AuthProvider, mode: AuthMode, profile?: UserProfile) => {
+      const userId = deriveUserIdFromProfile(profile);
+      const next: Session = { provider, mode, profile, userId };
+      setSession(next);
+      AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+    },
+    []
+  );
+
+  const handleSignOut = useCallback(() => {
+    setSession(null);
+    AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+  }, []);
+
+  if (restoring) {
+    return null; // or a minimal loading splash
+  }
 
   if (!session) {
-    return (
-      <AuthScreen
-        onAuthenticated={(provider, mode) => {
-          setSession({ provider, mode });
-        }}
-      />
-    );
+    return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
 
   return (
-    <AppStateProvider>
-      <AppContent
-        session={session}
-        onSignOut={() => {
-          setSession(null);
-        }}
-      />
+    <AppStateProvider userId={session.userId}>
+      <AppContent session={session} onSignOut={handleSignOut} />
     </AppStateProvider>
   );
 }
