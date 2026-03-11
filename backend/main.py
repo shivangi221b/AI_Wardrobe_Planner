@@ -7,11 +7,16 @@ from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, HttpUrl
+from starlette.concurrency import run_in_threadpool
 
+from vision.extractor import extract_garments_from_image
+
+from .db import insert_garment
 from .models import (
     GarmentCategory,
     GarmentFormality,
@@ -20,9 +25,11 @@ from .models import (
     MediaIngestionJob,
     MediaIngestionStatus,
     MediaType,
+    WeekEvent,
 )
 from .routers import recommendations, weather_router
-from .storage import get_wardrobe
+from .storage import get_wardrobe, store_week_events
+from .storage import _week_events as _week_events_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -156,3 +163,183 @@ def get_media_ingestion_job(job_id: str) -> MediaIngestionJob:
 @app.get("/wardrobe/{user_id}", response_model=List[GarmentItem])
 def get_wardrobe_endpoint(user_id: str) -> List[GarmentItem]:
     return get_wardrobe(user_id)
+
+
+# ---------------------------------------------------------------------------
+# Week-events endpoints
+# ---------------------------------------------------------------------------
+
+
+class WeekEventsBody(BaseModel):
+    events: List[WeekEvent]
+
+
+@app.get("/users/{user_id}/week-events", response_model=WeekEventsBody)
+def get_week_events(user_id: str) -> WeekEventsBody:
+    events = list(_week_events_store.get(user_id, []))
+    return WeekEventsBody(events=events)
+
+
+@app.put("/users/{user_id}/week-events", response_model=WeekEventsBody)
+def put_week_events(user_id: str, body: WeekEventsBody) -> WeekEventsBody:
+    store_week_events(user_id, body.events)
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Wardrobe mutation endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/wardrobe/{user_id}/items", response_model=GarmentItem)
+def add_wardrobe_item(user_id: str, request: AddGarmentRequest) -> GarmentItem:
+    now = datetime.utcnow()
+    garment = GarmentItem(
+        id=str(uuid4()),
+        user_id=user_id,
+        primary_image_url=request.primary_image_url,
+        category=request.category,
+        sub_category=request.name,
+        color_primary=request.color,
+        formality=request.formality,
+        created_at=now,
+        updated_at=now,
+    )
+    return insert_garment(garment)
+
+
+@app.post("/wardrobe/{user_id}/search-garment", response_model=List[SearchGarmentResult])
+async def search_garment_images(user_id: str, request: SearchGarmentRequest) -> List[SearchGarmentResult]:
+    """
+    Lightweight onboarding: user types e.g. "Zara black linen shirt" and picks an image.
+
+    Uses SerpAPI Google Images search to fetch product-style photos.
+    Env required:
+      - SERPAPI_KEY
+    """
+    api_key = (os.getenv("SERPAPI_KEY") or "").strip()
+    base_query = (request.query or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Garment search not configured. Set SERPAPI_KEY in the backend env.",
+        )
+    if not base_query:
+        raise HTTPException(status_code=400, detail="Missing query.")
+
+    limit = max(1, min(20, int(request.limit or 20)))
+
+    parts = [base_query]
+    if request.gender and str(request.gender).strip().lower() in ("men", "women"):
+        parts.append(f"for {request.gender.strip().lower()}")
+    if request.color:
+        parts.append(str(request.color))
+    if request.material:
+        parts.append(str(request.material))
+    if request.kind:
+        parts.append(str(request.kind))
+    parts.append("clothing product photo, studio, on white background")
+    parts.append("-person -people -model -man -woman -face -selfie")
+
+    query = " ".join(str(p).strip() for p in parts if str(p).strip())
+    logger.info("Garment search start user_id=%s q=%r limit=%d", user_id, query, limit)
+
+    url = "https://serpapi.com/search.json"
+    params = {
+        "engine": "google_images",
+        "q": query,
+        "api_key": api_key,
+        "num": str(limit),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params)
+            raw = resp.text
+            if resp.status_code >= 400:
+                logger.error("Garment search failed status=%d body=%s", resp.status_code, raw[:500])
+                raise HTTPException(
+                    status_code=502,
+                    detail="Garment search provider failed. Check SERPAPI_KEY or try again later.",
+                )
+            data = resp.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Garment search request error")
+        raise HTTPException(status_code=502, detail="Garment search request failed. Please retry.") from exc
+
+    items = data.get("images_results") if isinstance(data, dict) else []
+    results: List[SearchGarmentResult] = []
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            link = item.get("original") or item.get("thumbnail")
+            if not isinstance(link, str) or not link.strip():
+                continue
+            results.append(SearchGarmentResult(
+                image_url=link.strip(),
+                title=item.get("title") if isinstance(item.get("title"), str) else None,
+                source_url=item.get("link") if isinstance(item.get("link"), str) else None,
+            ))
+
+    logger.info("Garment search complete user_id=%s results=%d", user_id, len(results))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Vision endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.post("/vision/extract", response_model=List[GarmentItem])
+async def extract_wardrobe_from_image(
+    user_id: str = Form(...),
+    file: UploadFile = File(...),
+) -> List[GarmentItem]:
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    mime_type = file.content_type or "image/jpeg"
+    logger.info(
+        "Vision extract request user_id=%s filename=%s mime=%s bytes=%d",
+        user_id, file.filename, mime_type, len(image_bytes),
+    )
+
+    try:
+        extracted = await run_in_threadpool(extract_garments_from_image, image_bytes, mime_type)
+    except RuntimeError as exc:
+        logger.exception("Vision extraction failed user_id=%s filename=%s", user_id, file.filename)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if not extracted:
+        raise HTTPException(
+            status_code=422,
+            detail="No garments detected from image. Please upload a clearer outfit photo.",
+        )
+
+    from .storage import upload_garment_image
+
+    now = datetime.utcnow()
+    garments: List[GarmentItem] = []
+    for item in extracted:
+        garment_id = str(uuid4())
+        public_url = upload_garment_image(user_id, garment_id, item.image_bytes)
+        garment = GarmentItem(
+            id=garment_id,
+            user_id=user_id,
+            primary_image_url=public_url,
+            category=_safe_category(item.category),
+            sub_category=item.sub_category,
+            color_primary=item.color_primary,
+            formality=_safe_formality(item.formality),
+            seasonality=_safe_seasonality(item.seasonality),
+            created_at=now,
+            updated_at=now,
+        )
+        garments.append(insert_garment(garment))
+
+    logger.info("Vision pipeline persisted user_id=%s inserted_items=%d", user_id, len(garments))
+    return garments
