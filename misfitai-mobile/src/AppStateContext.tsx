@@ -97,7 +97,15 @@ export function AppStateProvider({
   >([]);
   const [isLoadingWardrobe, setIsLoadingWardrobe] = useState(false);
   const [wardrobeError, setWardrobeError] = useState<string | null>(null);
-  const userId = userIdProp ?? `demo-${Math.random().toString(36).slice(2, 8)}`;
+  const [userId, setUserId] = useState<string>(
+    () => userIdProp ?? `demo-${Math.random().toString(36).slice(2, 8)}`
+  );
+
+  useEffect(() => {
+    if (userIdProp && userIdProp !== userId) {
+      setUserId(userIdProp);
+    }
+  }, [userIdProp, userId]);
 
   useEffect(() => {
     let cancelled = false;

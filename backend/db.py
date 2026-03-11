@@ -27,9 +27,12 @@ def get_supabase_client() -> Client:
 
 
 def _use_local_store() -> bool:
-    backend = os.getenv("IMAGE_STORAGE_BACKEND", "supabase").strip().lower()
     has_supabase = bool(os.getenv("SUPABASE_URL")) and bool(os.getenv("SUPABASE_SERVICE_KEY"))
-    return backend == "local" and not has_supabase
+    # If Supabase is not configured, always fall back to local store.
+    if not has_supabase:
+        return True
+    backend = os.getenv("IMAGE_STORAGE_BACKEND", "supabase").strip().lower()
+    return backend == "local"
 
 
 def _table_name() -> str:

@@ -4,6 +4,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 import logging
+import re
 
 from supabase import Client, create_client
 
@@ -31,14 +32,24 @@ def _local_base_url() -> str:
     return os.getenv("LOCAL_ASSET_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
+def _safe_segment(value: str) -> str:
+    """
+    Sanitize user-controlled ids before using them in filesystem paths.
+    """
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]", "_", str(value))
+    return cleaned or "anon"
+
+
 def _save_garment_image_locally(user_id: str, garment_id: str, image_bytes: bytes) -> str:
     root = _local_storage_dir()
-    user_dir = root / user_id
+    safe_user_id = _safe_segment(user_id)
+    safe_garment_id = _safe_segment(garment_id)
+    user_dir = root / safe_user_id
     user_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{garment_id}.jpg"
+    filename = f"{safe_garment_id}.jpg"
     file_path = user_dir / filename
     file_path.write_bytes(image_bytes)
-    url = f"{_local_base_url()}/assets/local-garments/{user_id}/{filename}"
+    url = f"{_local_base_url()}/assets/local-garments/{safe_user_id}/{filename}"
     logger.info("Saved local garment asset path=%s bytes=%d", file_path, len(image_bytes))
     return url
 

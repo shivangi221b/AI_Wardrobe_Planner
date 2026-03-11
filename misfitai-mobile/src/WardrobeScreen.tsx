@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useAppState } from './AppStateContext';
 import { getApiErrorMessage } from './api';
-import { getImageForGarment } from './stockImages';
+import { getImageForGarment, shoesImage } from './stockImages';
 import { palette, radius, type } from './theme';
 
 export function WardrobeScreen({
@@ -651,10 +651,11 @@ export function WardrobeScreen({
                     source={
                       garment.primaryImageUrl
                         ? { uri: garment.primaryImageUrl }
-                        : getImageForGarment(
-                            garment.name,
-                            garment.category === 'bottom' ? 'bottom' : 'top'
-                          )
+                        : garment.category === 'bottom'
+                          ? getImageForGarment(garment.name, 'bottom')
+                          : garment.category === 'shoes'
+                            ? shoesImage
+                            : getImageForGarment(garment.name, 'top')
                     }
                     style={styles.cardImage}
                     resizeMode="contain"

@@ -12,6 +12,8 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from pydantic import HttpUrl
+from starlette.concurrency import run_in_threadpool
 
 from vision.extractor import extract_garments_from_image
 
@@ -72,7 +74,7 @@ class AddGarmentRequest(BaseModel):
     category: GarmentCategory
     color: Optional[str] = None
     formality: Optional[GarmentFormality] = None
-    primary_image_url: str
+    primary_image_url: HttpUrl
 
 
 class SearchGarmentRequest(BaseModel):
@@ -278,7 +280,8 @@ async def extract_wardrobe_from_image(
         len(image_bytes),
     )
     try:
-        extracted = extract_garments_from_image(image_bytes, mime_type=mime_type)
+        # Run potentially heavy/IO-bound extraction in a threadpool to avoid blocking the event loop.
+        extracted = await run_in_threadpool(extract_garments_from_image, image_bytes, mime_type)
     except RuntimeError as exc:
         logger.exception("Vision extraction failed user_id=%s filename=%s", user_id, file.filename)
         raise HTTPException(status_code=503, detail=str(exc)) from exc

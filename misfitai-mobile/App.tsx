@@ -19,12 +19,17 @@ type Session = {
   provider: AuthProvider;
   mode: AuthMode;
   profile?: UserProfile;
+  /** Stable user id derived at auth-time, used for all API calls. */
+  userId: string;
 };
 
-/** Stable user id for API/Supabase: provider id, or sanitized email, or fallback. */
-function deriveUserId(profile?: UserProfile): string {
+/** Stable user id for API/Supabase: provider id, or normalized email, or fallback. */
+function deriveUserIdFromProfile(profile?: UserProfile): string {
   if (profile?.id) return profile.id;
-  if (profile?.email) return `email-${profile.email.replace(/@/g, '-at-').replace(/\./g, '-dot-')}`;
+  if (profile?.email) {
+    const normalizedEmail = profile.email.trim().toLowerCase();
+    return `email-${normalizedEmail.replace(/@/g, '-at-').replace(/\./g, '-dot-')}`;
+  }
   return `demo-${Math.random().toString(36).slice(2, 10)}`;
 }
 
@@ -119,7 +124,9 @@ export default function App() {
         if (cancelled) return;
         try {
           const parsed = raw ? (JSON.parse(raw) as Session) : null;
-          if (parsed?.provider && parsed?.mode) setSession(parsed);
+          if (parsed?.provider && parsed?.mode && parsed?.userId) {
+            setSession(parsed);
+          }
         } catch {
           // ignore invalid stored session
         }
@@ -132,11 +139,15 @@ export default function App() {
     };
   }, []);
 
-  const handleAuthenticated = useCallback((provider: AuthProvider, mode: AuthMode, profile?: UserProfile) => {
-    const next: Session = { provider, mode, profile };
-    setSession(next);
-    AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
-  }, []);
+  const handleAuthenticated = useCallback(
+    (provider: AuthProvider, mode: AuthMode, profile?: UserProfile) => {
+      const userId = deriveUserIdFromProfile(profile);
+      const next: Session = { provider, mode, profile, userId };
+      setSession(next);
+      AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+    },
+    []
+  );
 
   const handleSignOut = useCallback(() => {
     setSession(null);
@@ -151,10 +162,8 @@ export default function App() {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
 
-  const userId = deriveUserId(session.profile);
-
   return (
-    <AppStateProvider userId={userId}>
+    <AppStateProvider userId={session.userId}>
       <AppContent session={session} onSignOut={handleSignOut} />
     </AppStateProvider>
   );
