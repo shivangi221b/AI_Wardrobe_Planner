@@ -9,7 +9,7 @@ via keyword matching, and persists the result as the user's week plan.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 import httpx
@@ -43,8 +43,8 @@ def _map_summary_to_event_type(summary: str) -> str:
 
 
 def _iso_week_bounds() -> tuple[str, str]:
-    """Return RFC3339 strings for Monday 00:00 and Sunday 23:59:59 of the current week."""
-    today = date.today()
+    """Return RFC3339 strings for Monday 00:00 and Sunday 23:59:59 of the current UTC week."""
+    today = datetime.now(timezone.utc).date()
     monday = today - timedelta(days=today.weekday())
     sunday = monday + timedelta(days=6)
     time_min = datetime(monday.year, monday.month, monday.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
@@ -100,7 +100,7 @@ async def sync_calendar(user_id: str, body: CalendarSyncRequest) -> WeekEventsBo
     # Multiple events on the same day: first non-none match wins; fallback to "casual".
     day_events: dict[int, str] = {}
 
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
     monday = today - timedelta(days=today.weekday())
 
     for item in google_items:

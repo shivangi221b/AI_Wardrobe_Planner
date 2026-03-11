@@ -190,7 +190,12 @@ export function AppStateProvider({
     if (!googleAccessToken) {
       throw new Error('No Google access token available. Please sign in with Google again.');
     }
-    const result = await apiSyncCalendarEvents(userId, googleAccessToken);
+    let result;
+    try {
+      result = await apiSyncCalendarEvents(userId, googleAccessToken);
+    } catch (error) {
+      throw new Error(getApiErrorMessage(error, 'Failed to sync calendar events.'));
+    }
     if (result.events.length > 0) {
       const updated = createInitialEvents();
       result.events.forEach((event) => {

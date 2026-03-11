@@ -147,8 +147,10 @@ export default function App() {
       const next: Session = { provider, mode, profile, userId };
       setSession(next);
       AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
-      if (accessToken) {
+      if (provider === 'google' && accessToken) {
         setGoogleAccessToken(accessToken);
+      } else {
+        setGoogleAccessToken(null);
       }
     },
     []
@@ -156,6 +158,7 @@ export default function App() {
 
   const handleSignOut = useCallback(() => {
     setSession(null);
+    setGoogleAccessToken(null);
     AsyncStorage.removeItem(SESSION_STORAGE_KEY);
   }, []);
 
