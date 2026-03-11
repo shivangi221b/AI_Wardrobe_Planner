@@ -12,6 +12,8 @@ import type {
   DayRecommendation,
   EventType,
   Garment,
+  GarmentSeasonality,
+  GarmentFormality,
 } from './types';
 import { dayOrder } from './constants';
 import {
@@ -51,7 +53,8 @@ interface AppState {
       name: string;
       category: 'top' | 'bottom' | 'shoes' | 'accessory';
       color?: string;
-      formality?: 'casual' | 'smart_casual' | 'business' | 'formal';
+      formality?: GarmentFormality;
+      seasonality?: GarmentSeasonality;
     }
   ) => Promise<void>;
   addGarmentViaVision: (payload: VisionAddPayload) => Promise<void>;
@@ -197,7 +200,8 @@ export function AppStateProvider({
     name: string;
     category: 'top' | 'bottom' | 'shoes' | 'accessory';
     color?: string;
-    formality?: 'casual' | 'smart_casual' | 'business' | 'formal';
+    formality?: GarmentFormality;
+    seasonality?: GarmentSeasonality;
   }): Promise<void> => {
     const created = await addGarment(userId, payload);
     setGarments((current) => {

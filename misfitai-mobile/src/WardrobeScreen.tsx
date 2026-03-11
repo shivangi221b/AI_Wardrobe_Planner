@@ -35,8 +35,11 @@ export function WardrobeScreen({
   const [category, setCategory] = useState<'top' | 'bottom' | 'shoes' | 'accessory'>('top');
   const [color, setColor] = useState('');
   const [formality, setFormality] = useState<
-    'casual' | 'smart_casual' | 'business' | 'formal'
-  >('casual');
+    'casual' | 'smart_casual' | 'business' | 'formal' | null
+  >(null);
+  const [seasonality, setSeasonality] = useState<'hot' | 'mild' | 'cold' | 'all_season'>(
+    'all_season'
+  );
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [visionSaving, setVisionSaving] = useState(false);
@@ -47,7 +50,14 @@ export function WardrobeScreen({
   const [searchColor, setSearchColor] = useState('');
   const [searchMaterial, setSearchMaterial] = useState('');
   const [searchKind, setSearchKind] = useState('');
+  const [searchFormality, setSearchFormality] = useState<
+    'casual' | 'smart_casual' | 'business' | 'formal'
+  >('casual');
+  const [searchSeasonality, setSearchSeasonality] = useState<
+    'hot' | 'mild' | 'cold' | 'all_season'
+  >('all_season');
   const [searching, setSearching] = useState(false);
+  const [searchStatusIndex, setSearchStatusIndex] = useState(0);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchGender, setSearchGender] = useState<'any' | 'men' | 'women'>('any');
   const [searchResults, setSearchResults] = useState<
@@ -73,6 +83,24 @@ export function WardrobeScreen({
     }).start();
   }, [entrance]);
 
+  useEffect(() => {
+    if (!searching) {
+      setSearchStatusIndex(0);
+      return;
+    }
+    const messages = [
+      'Looking up the internet...',
+      'Asking the fashion goblins...',
+      'Rifling through digital closets...',
+      'Arguing with the algorithm about taste...',
+      'Dusting off runway archives...',
+    ];
+    const id = setInterval(() => {
+      setSearchStatusIndex((current) => (current + 1) % messages.length);
+    }, 2000);
+    return () => clearInterval(id);
+  }, [searching]);
+
   const handleSave = async () => {
     if (!name.trim()) {
       return;
@@ -84,12 +112,14 @@ export function WardrobeScreen({
       await addGarmentToWardrobe({
         name: name.trim(),
         category,
-        color: color.trim(),
-        formality,
+        color: undefined,
+        formality: formality ?? undefined,
+        seasonality,
       });
       setName('');
       setColor('');
-      setFormality('casual');
+      setFormality(null);
+      setSeasonality('all_season');
     } catch {
       setSaveError('Could not save this item. Please try again.');
     } finally {
@@ -163,13 +193,16 @@ export function WardrobeScreen({
         name: (selected.title || searchQuery || 'Garment').trim(),
         category: searchCategory,
         color: searchColor.trim(),
-        formality: 'casual',
+        formality: searchFormality,
+        seasonality: searchSeasonality,
         imageUrl: selected.imageUrl,
       });
       setSearchQuery('');
       setSearchColor('');
       setSearchMaterial('');
       setSearchKind('');
+      setSearchFormality('casual');
+      setSearchSeasonality('all_season');
       setSearchResults([]);
       setSelectedSearchIndex(null);
     } catch (error) {
@@ -211,7 +244,7 @@ export function WardrobeScreen({
                 style={[styles.chip, addMode === 'search' && styles.chipActive]}
               >
                 <Text style={[styles.chipText, addMode === 'search' && styles.chipTextActive]}>
-                  Search & add
+                  Search & Add
                 </Text>
               </Pressable>
               <Pressable
@@ -249,7 +282,7 @@ export function WardrobeScreen({
 
             {addMode === 'search' ? (
               <>
-          <Text style={styles.visionTitle}>Search & add</Text>
+          <Text style={styles.visionTitle}>Search & Add</Text>
             <Text style={styles.visionCopy}>
               Type a brand + item (e.g. “Zara black linen shirt”), pick an image, and add it instantly.
             </Text>
@@ -298,7 +331,7 @@ export function WardrobeScreen({
             </View>
             <View style={styles.row}>
               <View style={styles.col}>
-                <Text style={styles.label}>For</Text>
+                <Text style={styles.label}>For (optional)</Text>
                 <View style={styles.chipRow}>
                   <Pressable
                     onPress={() => setSearchGender('any')}
@@ -350,8 +383,7 @@ export function WardrobeScreen({
                   </Pressable>
                 </View>
               </View>
-            </View>
-            <View style={styles.row}>
+
               <View style={styles.col}>
                 <Text style={styles.label}>Category</Text>
                 <View style={styles.chipRow}>
@@ -421,34 +453,87 @@ export function WardrobeScreen({
                   </Pressable>
                 </View>
               </View>
+            </View>
 
+            <View style={styles.row}>
               <View style={styles.col}>
-                <Text style={styles.label}>Actions</Text>
-                <View style={styles.actionsRow}>
-                  <Pressable
-                    onPress={handleSearch}
-                    disabled={searching}
-                    style={styles.visionButton}
-                  >
-                    <Text style={styles.visionButtonText}>
-                      {searching ? 'Searching...' : 'Search'}
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={handleSearchAdd}
-                    disabled={searchAdding || selectedSearchIndex === null}
-                    style={[
-                      styles.primaryChipButton,
-                      (searchAdding || selectedSearchIndex === null) &&
-                        styles.primaryChipButtonDisabled,
-                    ]}
-                  >
-                    <Text style={styles.primaryChipButtonText}>
-                      {searchAdding ? 'Adding...' : 'Add selected'}
-                    </Text>
-                  </Pressable>
+                <Text style={styles.label}>Formality (optional)</Text>
+                <View style={styles.chipRow}>
+                  {(['casual', 'smart_casual', 'business', 'formal'] as const).map((item) => {
+                    const active = searchFormality === item;
+                    return (
+                      <Pressable
+                        key={item}
+                        onPress={() => setSearchFormality(item)}
+                        style={[styles.chip, active && styles.chipActive]}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                          {item === 'smart_casual'
+                            ? 'Smart casual'
+                            : item[0].toUpperCase() + item.slice(1)}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
               </View>
+
+              <View style={styles.col}>
+                <Text style={styles.label}>Seasonality (optional)</Text>
+                <View style={styles.chipRow}>
+                  {(['all_season', 'hot', 'mild', 'cold'] as const).map((item) => {
+                    const active = searchSeasonality === item;
+                    const label =
+                      item === 'all_season'
+                        ? 'All season'
+                        : item[0].toUpperCase() + item.slice(1);
+                    return (
+                      <Pressable
+                        key={item}
+                        onPress={() => setSearchSeasonality(item)}
+                        style={[styles.chip, active && styles.chipActive]}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                          {label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.actionsRow}>
+              <Pressable
+                onPress={handleSearch}
+                disabled={searching}
+                style={styles.searchPrimaryButton}
+              >
+                <Text style={styles.searchPrimaryButtonText}>
+                  {searching
+                    ? [
+                        'Looking up the internet...',
+                        'Asking the fashion goblins...',
+                        'Rifling through digital closets...',
+                        'Arguing with the algorithm about taste...',
+                        'Dusting off runway archives...',
+                      ][searchStatusIndex]
+                    : 'Search'}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={handleSearchAdd}
+                disabled={searchAdding || selectedSearchIndex === null}
+                style={[
+                  styles.searchSecondaryButton,
+                  (searchAdding || selectedSearchIndex === null) &&
+                    styles.searchSecondaryButtonDisabled,
+                ]}
+              >
+                <Text style={styles.searchSecondaryButtonText}>
+                  {searchAdding ? 'Adding...' : 'Add to wardrobe'}
+                </Text>
+              </Pressable>
             </View>
 
             {searchResults.length ? (
@@ -517,7 +602,9 @@ export function WardrobeScreen({
                     onPress={() => setCategory('top')}
                     style={[styles.chip, category === 'top' && styles.chipActive]}
                   >
-                    <Text style={[styles.chipText, category === 'top' && styles.chipTextActive]}>Top</Text>
+                    <Text style={[styles.chipText, category === 'top' && styles.chipTextActive]}>
+                      Top
+                    </Text>
                   </Pressable>
                   <Pressable
                     onPress={() => setCategory('bottom')}
@@ -539,7 +626,9 @@ export function WardrobeScreen({
                     onPress={() => setCategory('accessory')}
                     style={[styles.chip, category === 'accessory' && styles.chipActive]}
                   >
-                    <Text style={[styles.chipText, category === 'accessory' && styles.chipTextActive]}>
+                    <Text
+                      style={[styles.chipText, category === 'accessory' && styles.chipTextActive]}
+                    >
                       Accessory
                     </Text>
                   </Pressable>
@@ -547,29 +636,44 @@ export function WardrobeScreen({
               </View>
 
               <View style={styles.col}>
-                <Text style={styles.label}>Color</Text>
-                <TextInput
-                  value={color}
-                  onChangeText={setColor}
-                  placeholder="Charcoal"
-                  placeholderTextColor="#8f8f8a"
-                  style={styles.input}
-                />
+                <Text style={styles.label}>Formality (optional)</Text>
+                <View style={styles.chipRow}>
+                  {(['casual', 'smart_casual', 'business', 'formal'] as const).map((item) => {
+                    const active = formality === item;
+                    return (
+                      <Pressable
+                        key={item}
+                        onPress={() =>
+                          setFormality((current) => (current === item ? null : item))
+                        }
+                        style={[styles.chip, active && styles.chipActive]}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                          {item === 'smart_casual'
+                            ? 'Smart casual'
+                            : item[0].toUpperCase() + item.slice(1)}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
               </View>
             </View>
 
-            <Text style={styles.label}>Formality</Text>
+            <Text style={styles.label}>Seasonality (optional)</Text>
             <View style={styles.chipRow}>
-              {(['casual', 'smart_casual', 'business', 'formal'] as const).map((item) => {
-                const active = formality === item;
+              {(['all_season', 'hot', 'mild', 'cold'] as const).map((item) => {
+                const active = seasonality === item;
+                const label =
+                  item === 'all_season' ? 'All season' : item[0].toUpperCase() + item.slice(1);
                 return (
                   <Pressable
                     key={item}
-                    onPress={() => setFormality(item)}
+                    onPress={() => setSeasonality(item)}
                     style={[styles.chip, active && styles.chipActive]}
                   >
                     <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                      {item === 'smart_casual' ? 'Smart' : item[0].toUpperCase() + item.slice(1)}
+                      {label}
                     </Text>
                   </Pressable>
                 );
@@ -665,7 +769,18 @@ export function WardrobeScreen({
                     <Text style={styles.cardMeta}>
                       {garment.category} / {garment.formality.replace('_', ' ')}
                     </Text>
-                    <Text style={styles.cardMeta}>{garment.color || 'neutral tone'}</Text>
+                    {(() => {
+                      const rawTags = garment.tags ?? [];
+                      const extraTags = rawTags.filter(
+                        (tag) => tag !== garment.category && tag !== garment.formality
+                      );
+                      if (!extraTags.length) return null;
+                      return (
+                        <Text style={styles.cardMeta}>
+                          {extraTags.join(' • ')}
+                        </Text>
+                      );
+                    })()}
                   </View>
                 </View>
               ))}
@@ -838,7 +953,9 @@ const styles = StyleSheet.create({
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 14,
   },
   chipRow: {
     flexDirection: 'row',
@@ -941,5 +1058,36 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
     fontFamily: type.body,
+  },
+  searchPrimaryButton: {
+    flex: 1,
+    borderRadius: radius.pill,
+    backgroundColor: palette.accent,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  searchPrimaryButtonText: {
+    color: '#f4f4f2',
+    fontSize: 14,
+    fontFamily: type.bodyDemi,
+  },
+  searchSecondaryButton: {
+    flex: 1,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.ink,
+    backgroundColor: palette.panelStrong,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  searchSecondaryButtonDisabled: {
+    opacity: 0.45,
+  },
+  searchSecondaryButtonText: {
+    color: palette.ink,
+    fontSize: 14,
+    fontFamily: type.bodyDemi,
   },
 });

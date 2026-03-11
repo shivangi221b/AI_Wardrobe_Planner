@@ -8,6 +8,8 @@ export type GarmentCategory =
 
 export type GarmentFormality = 'casual' | 'smart_casual' | 'business' | 'formal';
 
+export type GarmentSeasonality = 'hot' | 'mild' | 'cold' | 'all_season';
+
 export interface Garment {
   id: string;
   userId?: string;
@@ -16,7 +18,9 @@ export interface Garment {
   category: GarmentCategory;
   color: string;
   formality: GarmentFormality;
+  seasonality?: GarmentSeasonality;
   primaryImageUrl?: string;
+  tags?: string[];
 }
 
 export type EventType =

@@ -30,6 +30,29 @@ class GarmentSeasonality(str, Enum):
     ALL_SEASON = "all_season"
 
 
+def build_garment_tags(
+    category: GarmentCategory,
+    formality: Optional[GarmentFormality] = None,
+    seasonality: Optional[GarmentSeasonality] = None,
+) -> list[str]:
+    """
+    Derive simple string tags for a garment from the core enums.
+
+    These tags are intended for downstream recommendation / retrieval systems
+    and are kept intentionally compact:
+
+    - Always includes the garment category value, e.g. ``"top"``.
+    - Includes formality (if present), e.g. ``"smart_casual"``.
+    - Includes seasonality (if present), e.g. ``"all_season"``.
+    """
+    tags: list[str] = [category.value]
+    if formality is not None:
+        tags.append(formality.value)
+    if seasonality is not None:
+        tags.append(seasonality.value)
+    return tags
+
+
 class GarmentItem(BaseModel):
     """
     Core wardrobe entity for a user.
@@ -59,6 +82,11 @@ class GarmentItem(BaseModel):
 
     # Opaque embedding identifier; actual vector stored in a separate service/index.
     embedding_id: Optional[str] = None
+
+    # Simple machine-readable tags derived from the enums above.  Persisted
+    # only in the API surface; database backends may recompute these from the
+    # structured fields.
+    tags: List[str] = []
 
     created_at: datetime
     updated_at: datetime

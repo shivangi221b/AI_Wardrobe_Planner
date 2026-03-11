@@ -8,6 +8,7 @@ import type {
   Garment,
   GarmentCategory,
   GarmentFormality,
+  GarmentSeasonality,
 } from './types';
 
 const DEFAULT_API_BASE_URL =
@@ -47,12 +48,9 @@ const validCategories: GarmentCategory[] = [
   'shoes',
   'accessory',
 ];
-const validFormalities: GarmentFormality[] = [
-  'casual',
-  'smart_casual',
-  'business',
-  'formal',
-];
+const validFormalities: GarmentFormality[] = ['casual', 'smart_casual', 'business', 'formal'];
+
+const validSeasonalities: GarmentSeasonality[] = ['hot', 'mild', 'cold', 'all_season'];
 
 interface WardrobeApiItem {
   id: string;
@@ -64,7 +62,9 @@ interface WardrobeApiItem {
   color_primary?: string | null;
   color_secondary?: string | null;
   formality?: string | null;
+  seasonality?: string | null;
   primary_image_url?: string;
+  tags?: string[] | null;
 }
 
 interface WeekEventApi {
@@ -97,6 +97,7 @@ export interface AddGarmentPayload {
   category: 'top' | 'bottom' | 'shoes' | 'accessory';
   color?: string;
   formality?: GarmentFormality;
+  seasonality?: GarmentSeasonality;
   primaryImageUrl?: string;
 }
 
@@ -123,6 +124,7 @@ export interface ConfirmSearchAddPayload {
   category: 'top' | 'bottom' | 'shoes' | 'accessory';
   color?: string;
   formality?: GarmentFormality;
+  seasonality?: GarmentSeasonality;
   imageUrl: string;
 }
 
@@ -169,6 +171,13 @@ function normalizeFormality(value?: string | null): GarmentFormality {
     return value as GarmentFormality;
   }
   return 'casual';
+}
+
+function normalizeSeasonality(value?: string | null): GarmentSeasonality {
+  if (value && validSeasonalities.includes(value as GarmentSeasonality)) {
+    return value as GarmentSeasonality;
+  }
+  return 'all_season';
 }
 
 function normalizeCategory(value?: string): GarmentCategory {
@@ -221,7 +230,9 @@ function mapGarment(item: WardrobeApiItem): Garment {
     category: normalizeCategory(item.category),
     color: (item.color || item.color_primary || item.color_secondary || '').trim(),
     formality: normalizeFormality(item.formality),
+    seasonality: normalizeSeasonality(item.seasonality),
     primaryImageUrl: item.primary_image_url,
+    tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
   };
 }
 
@@ -532,6 +543,7 @@ export async function addGarment(
         category: payload.category,
         color: payload.color,
         formality: payload.formality ?? 'casual',
+        seasonality: payload.seasonality ?? 'all_season',
         primary_image_url:
           payload.primaryImageUrl ?? 'https://example.com/garment-placeholder.jpg',
       }),
@@ -623,6 +635,7 @@ export async function confirmSearchAdd(
     category: payload.category,
     color: payload.color,
     formality: payload.formality,
+    seasonality: payload.seasonality,
     primaryImageUrl: payload.imageUrl,
   });
 }
