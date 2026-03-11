@@ -1,25 +1,17 @@
 from __future__ import annotations
 
-import os
-from datetime import datetime
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
 
-import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from pydantic import HttpUrl
-from starlette.concurrency import run_in_threadpool
+from pydantic import BaseModel, HttpUrl
 
-from vision.extractor import extract_garments_from_image
-
-from .db import get_wardrobe as get_wardrobe_items
-from .db import insert_garment
 from .models import (
     GarmentCategory,
     GarmentFormality,
@@ -31,7 +23,6 @@ from .models import (
 )
 from .routers import recommendations, weather_router
 from .storage import get_wardrobe
-from .storage import upload_garment_image
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -42,22 +33,15 @@ app = FastAPI(title="AI Wardrobe Planner API", version="0.1.0")
 # binary can serve local dev and staging without code changes.
 # Set ALLOWED_ORIGINS to a comma-separated list of trusted origins in production.
 # Example: ALLOWED_ORIGINS="https://app.misfitai.com,https://staging.misfitai.com"
-_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8081,http://localhost:3000")
+_raw_origins = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:8081,http://127.0.0.1:8081,http://localhost:3000",
+)
 _allowed_origins: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8081",
-        "http://127.0.0.1:8081",
-    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

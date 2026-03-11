@@ -139,3 +139,29 @@ def insert_garment(garment: GarmentItem) -> GarmentItem:
     result = get_supabase_client().table(_table_name()).insert(payload).execute()
     row = (result.data or [payload])[0]
     return _row_to_garment(row)
+
+
+def set_wardrobe(user_id: str, items: List[GarmentItem]) -> None:
+    """Replace the entire wardrobe for *user_id* with *items*.
+
+    In local mode this directly resets the in-memory store.  Supabase mode
+    deletes all existing rows then re-inserts, so use sparingly in production.
+    """
+    if _use_local_store():
+        _local_wardrobes[user_id] = list(items)
+        return
+
+    client = get_supabase_client()
+    client.table(_table_name()).delete().eq("user_id", user_id).execute()
+    for garment in items:
+        payload = garment.model_dump(mode="json")
+        client.table(_table_name()).insert(payload).execute()
+
+
+def add_garments(user_id: str, items: List[GarmentItem]) -> None:
+    """Append *items* to the wardrobe for *user_id*.
+
+    Intended for use by the ingestion worker once it finishes processing a job.
+    """
+    for garment in items:
+        insert_garment(garment)

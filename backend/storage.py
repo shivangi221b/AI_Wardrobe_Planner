@@ -5,10 +5,44 @@ from functools import lru_cache
 from pathlib import Path
 import logging
 import re
+from typing import List
 
 from supabase import Client, create_client
 
+from .db import (
+    add_garments,
+    get_wardrobe,
+    set_wardrobe,
+)
+from .models import GarmentItem, WeekEvent
+
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Week-events store — kept in-memory until a DB table is provisioned.
+# ---------------------------------------------------------------------------
+
+_week_events: dict[str, List[WeekEvent]] = {}
+
+
+def store_week_events(user_id: str, events: List[WeekEvent]) -> None:
+    """Persist (overwrite) the week plan for *user_id*."""
+    _week_events[user_id] = list(events)
+
+
+def user_exists(user_id: str) -> bool:
+    """Return True if *user_id* has any record in either store."""
+    return bool(get_wardrobe(user_id)) or user_id in _week_events
+
+
+__all__ = [
+    "get_wardrobe",
+    "set_wardrobe",
+    "add_garments",
+    "store_week_events",
+    "user_exists",
+    "upload_garment_image",
+]
 
 @lru_cache(maxsize=1)
 def get_supabase_client() -> Client:
