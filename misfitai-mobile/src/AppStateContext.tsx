@@ -16,10 +16,16 @@ import { dayOrder } from './constants';
 import {
   addGarment,
   addGarmentFromVision,
+  confirmSearchAdd,
+  getApiErrorMessage,
   getWardrobe,
   getWeekEvents,
   getWeeklyRecommendations,
-  type VisionSampleKey,
+  searchGarmentImages,
+  type ConfirmSearchAddPayload,
+  type GarmentSearchResult,
+  type GarmentSearchOptions,
+  type VisionAddPayload,
   saveWeekEvents,
 } from './api';
 
@@ -30,6 +36,11 @@ interface AppState {
   isCalendarConnected: boolean;
   isLoadingWardrobe: boolean;
   wardrobeError: string | null;
+  searchGarmentCandidates: (
+    query: string,
+    limit?: number,
+    options?: GarmentSearchOptions
+  ) => Promise<GarmentSearchResult[]>;
   setCalendarConnected: (connected: boolean) => void;
   setEventForDay: (day: DayOfWeek, eventType: EventType) => void;
   useDemoWeek: () => void;
@@ -37,12 +48,13 @@ interface AppState {
   addGarmentToWardrobe: (
     payload: {
       name: string;
-      category: 'top' | 'bottom';
+      category: 'top' | 'bottom' | 'shoes' | 'accessory';
       color?: string;
       formality?: 'casual' | 'smart_casual' | 'business' | 'formal';
     }
   ) => Promise<void>;
-  addGarmentViaVision: (sampleKey: VisionSampleKey) => Promise<void>;
+  addGarmentViaVision: (payload: VisionAddPayload) => Promise<void>;
+  addGarmentViaSearch: (payload: ConfirmSearchAddPayload) => Promise<void>;
 }
 
 const AppStateContext = createContext<AppState | undefined>(undefined);
@@ -97,7 +109,7 @@ export function AppStateProvider({
         }
       } catch (error) {
         if (!cancelled) {
-          setWardrobeError('Failed to load wardrobe.');
+          setWardrobeError(getApiErrorMessage(error, 'Failed to load wardrobe.'));
         }
       }
 
@@ -171,7 +183,7 @@ export function AppStateProvider({
 
   const addGarmentToWardrobe = async (payload: {
     name: string;
-    category: 'top' | 'bottom';
+    category: 'top' | 'bottom' | 'shoes' | 'accessory';
     color?: string;
     formality?: 'casual' | 'smart_casual' | 'business' | 'formal';
   }): Promise<void> => {
@@ -185,8 +197,29 @@ export function AppStateProvider({
     });
   };
 
-  const addGarmentViaVision = async (sampleKey: VisionSampleKey): Promise<void> => {
-    const created = await addGarmentFromVision(userId, { sampleKey });
+  const addGarmentViaVision = async (payload: VisionAddPayload): Promise<void> => {
+    const createdItems = await addGarmentFromVision(userId, payload);
+    setGarments((current) => {
+      const byId = new Map(current.map((item) => [item.id, item]));
+      createdItems.forEach((item) => {
+        byId.set(item.id, item);
+      });
+      return Array.from(byId.values());
+    });
+  };
+
+  const searchGarmentCandidates = async (
+    query: string,
+    limit = 20,
+    options?: GarmentSearchOptions
+  ): Promise<GarmentSearchResult[]> => {
+    return searchGarmentImages(userId, query, limit, options);
+  };
+
+  const addGarmentViaSearch = async (
+    payload: ConfirmSearchAddPayload
+  ): Promise<void> => {
+    const created = await confirmSearchAdd(userId, payload);
     setGarments((current) => {
       const existingIndex = current.findIndex((item) => item.id === created.id);
       if (existingIndex === -1) {
@@ -204,12 +237,14 @@ export function AppStateProvider({
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
+      searchGarmentCandidates,
       setCalendarConnected,
       setEventForDay,
       useDemoWeek,
       generateRecommendations,
       addGarmentToWardrobe,
       addGarmentViaVision,
+      addGarmentViaSearch,
     }),
     [
       garments,
@@ -218,12 +253,14 @@ export function AppStateProvider({
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
+      searchGarmentCandidates,
       setCalendarConnected,
       setEventForDay,
       useDemoWeek,
       generateRecommendations,
       addGarmentToWardrobe,
       addGarmentViaVision,
+      addGarmentViaSearch,
     ]
   );
 

@@ -1,12 +1,10 @@
 fastapi
 uvicorn[standard]
 pydantic
-
-numpy
-opencv-python-headless
-scikit-learn
-
-torch
-ultralytics
-open-clip-torch
+google-genai
+rembg
+onnxruntime
+Pillow
+python-multipart
+supabase
 
