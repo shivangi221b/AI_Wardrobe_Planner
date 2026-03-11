@@ -21,6 +21,7 @@ export function EventsScreen({
   const {
     isCalendarConnected,
     setCalendarConnected,
+    syncCalendarEvents,
     eventsByDay,
     setEventForDay,
     useDemoWeek,
@@ -46,16 +47,22 @@ export function EventsScreen({
     ).start();
   }, [cardAnimations]);
 
-  const handleConnect = () => {
+  const handleConnect = async () => {
     if (isCalendarConnected) {
       return;
     }
 
     setConnecting(true);
-    setTimeout(() => {
-      setConnecting(false);
+    setError(null);
+    try {
+      await syncCalendarEvents();
       setCalendarConnected(true);
-    }, 820);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not connect calendar. Please try again.';
+      setError(message);
+    } finally {
+      setConnecting(false);
+    }
   };
 
   const handleSelectEvent = (day: DayOfWeek, type: EventType) => {
@@ -79,8 +86,7 @@ export function EventsScreen({
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Text style={styles.screenTitle}>Shape the week</Text>
         <Text style={styles.screenSubtitle}>
-          Calendar sync is mocked for MVP. Set one event per day and generate seven minimalist
-          looks from your wardrobe.
+          Set one event per day and generate seven minimalist looks from your wardrobe.
         </Text>
 
         <View style={styles.actionsRow}>
@@ -93,7 +99,7 @@ export function EventsScreen({
               {connecting
                 ? 'Connecting...'
                 : isCalendarConnected
-                ? 'Calendar connected (mock)'
+                ? 'Calendar connected'
                 : 'Connect calendar'}
             </Text>
           </Pressable>

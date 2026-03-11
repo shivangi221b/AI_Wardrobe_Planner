@@ -23,10 +23,21 @@ export const stockPieces: Array<{
 export const outerwearImage = stock.coat;
 export const shoesImage = stock.loafers;
 
-export function getImageForGarment(name: string, category: 'top' | 'bottom'): ImageSourcePropType {
+export function getImageForGarment(
+  name: string,
+  category: 'top' | 'bottom' | 'outerwear' | 'shoes' | 'dress' | 'accessory'
+): ImageSourcePropType {
   const normalized = name.toLowerCase();
 
-  if (category === 'top') {
+  if (category === 'outerwear') {
+    return stock.coat;
+  }
+
+  if (category === 'shoes') {
+    return stock.loafers;
+  }
+
+  if (category === 'top' || category === 'dress') {
     if (
       normalized.includes('shirt') ||
       normalized.includes('sweater') ||

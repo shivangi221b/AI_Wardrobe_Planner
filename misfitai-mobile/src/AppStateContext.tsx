@@ -25,6 +25,7 @@ import {
   getWeekEvents,
   getWeeklyRecommendations,
   searchGarmentImages,
+  syncCalendarEvents as apiSyncCalendarEvents,
   type ConfirmSearchAddPayload,
   type GarmentSearchResult,
   type GarmentSearchOptions,
@@ -47,6 +48,7 @@ interface AppState {
   setCalendarConnected: (connected: boolean) => void;
   setEventForDay: (day: DayOfWeek, eventType: EventType) => void;
   useDemoWeek: () => void;
+  syncCalendarEvents: () => Promise<void>;
   generateRecommendations: () => Promise<void>;
   addGarmentToWardrobe: (
     payload: {
@@ -86,10 +88,13 @@ function createInitialEvents(): Record<DayOfWeek, EventType> {
 export function AppStateProvider({
   children,
   userId: userIdProp,
+  googleAccessToken,
 }: {
   children: React.ReactNode;
   /** Stable user id from auth (e.g. Google/Apple id or email). Used for wardrobe API and Supabase. */
   userId?: string;
+  /** Google OAuth access token from sign-in (in-memory only, not persisted). Used for calendar sync. */
+  googleAccessToken?: string | null;
 }) {
   const [garments, setGarments] = useState<Garment[]>([]);
   const [isCalendarConnected, setIsCalendarConnected] = useState(false);
@@ -181,6 +186,30 @@ export function AppStateProvider({
     });
   }, []);
 
+  const syncCalendarEvents = useCallback(async () => {
+    if (!googleAccessToken) {
+      throw new Error('No Google access token available. Please sign in with Google again.');
+    }
+    let result;
+    try {
+      result = await apiSyncCalendarEvents(userId, googleAccessToken);
+    } catch (error) {
+      throw new Error(getApiErrorMessage(error, 'Failed to sync calendar events.'));
+    }
+    if (result.events.length > 0) {
+      const updated = createInitialEvents();
+      result.events.forEach((event) => {
+        if (
+          dayOrder.includes(event.day) &&
+          validEventTypes.includes(event.event_type)
+        ) {
+          updated[event.day] = event.event_type;
+        }
+      });
+      setEventsByDay(updated);
+    }
+  }, [userId, googleAccessToken]);
+
   const generateRecommendations = useCallback(async () => {
     const events: CalendarEvent[] = dayOrder.map((day, index) => ({
       id: 'event-' + index,
@@ -261,6 +290,7 @@ export function AppStateProvider({
       setCalendarConnected,
       setEventForDay,
       useDemoWeek,
+      syncCalendarEvents,
       generateRecommendations,
       addGarmentToWardrobe,
       addGarmentViaVision,
@@ -277,10 +307,10 @@ export function AppStateProvider({
       setCalendarConnected,
       setEventForDay,
       useDemoWeek,
+      syncCalendarEvents,
       generateRecommendations,
       addGarmentToWardrobe,
       addGarmentViaVision,
-      searchGarmentCandidates,
       addGarmentViaSearch,
     ]
   );

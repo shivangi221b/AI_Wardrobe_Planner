@@ -12,14 +12,28 @@ import {
 import { useAppState } from './AppStateContext';
 import { dayLabels, dayOrder, eventTypeLabels } from './constants';
 import { getFitSignals, getScheduleChips } from './lookUtils';
-import { getImageForGarment, outerwearImage, shoesImage } from './stockImages';
+import { getImageForGarment } from './stockImages';
 import type { DayOfWeek } from './types';
 import { palette, radius, type } from './theme';
 
+function isPlaceholderName(name: string): boolean {
+  const lower = name.toLowerCase().trim();
+  return (
+    !lower ||
+    lower.includes('no item') ||
+    lower.includes('not found') ||
+    lower === 'n/a' ||
+    lower === 'none' ||
+    lower === 'null'
+  );
+}
+
 export function WeeklyPlanScreen({
   onRegenerateWeek,
+  onNavigateToWardrobe,
 }: {
   onRegenerateWeek: () => Promise<void>;
+  onNavigateToWardrobe?: () => void;
 }) {
   const { garments, recommendations } = useAppState();
   const [regenerating, setRegenerating] = useState(false);
@@ -93,19 +107,52 @@ export function WeeklyPlanScreen({
   const bottomGarment = selectedRecommendation
     ? garments.find((item) => item.id === selectedRecommendation.outfit.bottomId)
     : undefined;
+  const outerwearGarment = garments.find((item) => item.category === 'outerwear');
+  const shoesGarment = garments.find((item) => item.category === 'shoes');
 
-  const topName = selectedRecommendation?.outfit.topName || topGarment?.name || 'Cream sweater';
-  const bottomName =
-    selectedRecommendation?.outfit.bottomName || bottomGarment?.name || 'Dark trousers';
+  const topName = selectedRecommendation?.outfit.topName || topGarment?.name || '';
+  const bottomName = selectedRecommendation?.outfit.bottomName || bottomGarment?.name || '';
 
-  const collagePieces = [
-    { name: topName, image: getImageForGarment(topName, 'top') },
-    { name: bottomName, image: getImageForGarment(bottomName, 'bottom') },
-    { name: 'Beige coat', image: outerwearImage },
-    { name: 'Brown loafers', image: shoesImage },
-  ];
+  type CollagePiece = { name: string; image: { uri: string } | ReturnType<typeof getImageForGarment> };
+  const collagePieces: CollagePiece[] = [];
+  const missingTop = !topName || isPlaceholderName(topName);
+  const missingBottom = !bottomName || isPlaceholderName(bottomName);
+  const hasMissingItems = missingTop || missingBottom;
 
-  const scheduleChips = selectedRecommendation ? getScheduleChips(selectedRecommendation.day) : [];
+  if (!missingTop) {
+    collagePieces.push({
+      name: topName,
+      image: topGarment?.primaryImageUrl
+        ? { uri: topGarment.primaryImageUrl }
+        : getImageForGarment(topName, 'top'),
+    });
+  }
+  if (!missingBottom) {
+    collagePieces.push({
+      name: bottomName,
+      image: bottomGarment?.primaryImageUrl
+        ? { uri: bottomGarment.primaryImageUrl }
+        : getImageForGarment(bottomName, 'bottom'),
+    });
+  }
+  if (outerwearGarment) {
+    collagePieces.push({
+      name: outerwearGarment.name,
+      image: outerwearGarment.primaryImageUrl
+        ? { uri: outerwearGarment.primaryImageUrl }
+        : getImageForGarment(outerwearGarment.name, 'outerwear'),
+    });
+  }
+  if (shoesGarment) {
+    collagePieces.push({
+      name: shoesGarment.name,
+      image: shoesGarment.primaryImageUrl
+        ? { uri: shoesGarment.primaryImageUrl }
+        : getImageForGarment(shoesGarment.name, 'shoes'),
+    });
+  }
+
+  const scheduleChips = selectedRecommendation ? getScheduleChips(selectedRecommendation.eventType) : [];
   const fitSignals = selectedRecommendation ? getFitSignals(selectedRecommendation.eventType) : [];
 
   return (
@@ -208,6 +255,26 @@ export function WeeklyPlanScreen({
                   );
                 })}
               </View>
+
+              {hasMissingItems ? (
+                <View style={styles.missingItemsBanner}>
+                  <Text style={styles.missingItemsTitle}>
+                    {missingTop && missingBottom
+                      ? 'No top or bottom in your wardrobe'
+                      : missingTop
+                        ? 'No top found in your wardrobe'
+                        : 'No bottom found in your wardrobe'}
+                  </Text>
+                  <Text style={styles.missingItemsBody}>
+                    Add more garments so the recommendation engine can build a complete outfit.
+                  </Text>
+                  {onNavigateToWardrobe ? (
+                    <Pressable onPress={onNavigateToWardrobe} style={styles.missingItemsButton}>
+                      <Text style={styles.missingItemsButtonText}>Add garments →</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
 
               <View style={styles.signalsRow}>
                 {fitSignals.map((signal) => (
@@ -400,6 +467,40 @@ const styles = StyleSheet.create({
     color: palette.ink,
     fontSize: 12,
     textAlign: 'center',
+    fontFamily: type.bodyDemi,
+  },
+  missingItemsBanner: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    borderStyle: 'dashed',
+    backgroundColor: palette.accentSoft,
+    padding: 14,
+    gap: 6,
+    alignItems: 'flex-start',
+  },
+  missingItemsTitle: {
+    color: palette.ink,
+    fontSize: 13,
+    fontFamily: type.bodyDemi,
+  },
+  missingItemsBody: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontFamily: type.body,
+  },
+  missingItemsButton: {
+    marginTop: 4,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.accent,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  missingItemsButtonText: {
+    color: palette.accent,
+    fontSize: 13,
     fontFamily: type.bodyDemi,
   },
   signalsRow: {
