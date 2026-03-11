@@ -35,13 +35,14 @@ export type UserProfile = {
   birthday?: string | null;
 };
 
-/** Scopes we request from Google: name, email, photo, gender, birthday. */
+/** Scopes we request from Google: name, email, photo, gender, birthday, and calendar read. */
 const GOOGLE_SCOPES = [
   'openid',
   'https://www.googleapis.com/auth/userinfo.profile',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/user.gender.read',
   'https://www.googleapis.com/auth/user.birthday.read',
+  'https://www.googleapis.com/auth/calendar.readonly',
 ];
 
 const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
@@ -51,7 +52,7 @@ const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
 export function AuthScreen({
   onAuthenticated,
 }: {
-  onAuthenticated: (provider: AuthProvider, mode: AuthMode, profile?: UserProfile) => void;
+  onAuthenticated: (provider: AuthProvider, mode: AuthMode, profile?: UserProfile, googleAccessToken?: string) => void;
 }) {
   const [mode, setMode] = useState<AuthMode>('login');
   const [loadingProvider, setLoadingProvider] = useState<AuthProvider | null>(null);
@@ -61,6 +62,11 @@ export function AuthScreen({
     ...(googleIosClientId && { iosClientId: googleIosClientId }),
     ...(googleAndroidClientId && { androidClientId: googleAndroidClientId }),
     scopes: GOOGLE_SCOPES,
+    // Force the consent screen so Google always issues a token that covers all
+    // requested scopes, including calendar.readonly which was added after the
+    // initial sign-in. Without this, returning users keep their old token which
+    // lacks the calendar scope and receives a 403 from the Calendar API.
+    prompt: 'consent',
   });
 
   const entrance = useRef(new Animated.Value(0)).current;
@@ -131,13 +137,13 @@ export function AuthScreen({
       (profile) => {
         if (!cancelled) {
           setLoadingProvider(null);
-          onAuthenticated('google', mode, profile);
+          onAuthenticated('google', mode, profile, accessToken);
         }
       },
       () => {
         if (!cancelled) {
           setLoadingProvider(null);
-          onAuthenticated('google', mode);
+          onAuthenticated('google', mode, undefined, accessToken);
         }
       }
     );

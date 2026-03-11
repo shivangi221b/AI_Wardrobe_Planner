@@ -28,7 +28,7 @@ from .models import (
     MediaType,
     WeekEvent,
 )
-from .routers import recommendations, weather_router
+from .routers import recommendations, weather_router, calendar_router
 from .storage import get_wardrobe, get_week_events as _storage_get_week_events, store_week_events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -56,6 +56,7 @@ app.add_middleware(
 
 app.include_router(recommendations.router)
 app.include_router(weather_router.router)
+app.include_router(calendar_router.router)
 
 _local_assets_dir = Path(os.getenv("LOCAL_GARMENTS_DIR", "outputs/local_garments"))
 _local_assets_dir.mkdir(parents=True, exist_ok=True)

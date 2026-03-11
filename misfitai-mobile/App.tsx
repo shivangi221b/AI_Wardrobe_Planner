@@ -117,6 +117,7 @@ function AppContent({
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [restoring, setRestoring] = useState(true);
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,11 +142,14 @@ export default function App() {
   }, []);
 
   const handleAuthenticated = useCallback(
-    (provider: AuthProvider, mode: AuthMode, profile?: UserProfile) => {
+    (provider: AuthProvider, mode: AuthMode, profile?: UserProfile, accessToken?: string) => {
       const userId = deriveUserIdFromProfile(profile);
       const next: Session = { provider, mode, profile, userId };
       setSession(next);
       AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+      if (accessToken) {
+        setGoogleAccessToken(accessToken);
+      }
     },
     []
   );
@@ -164,7 +168,7 @@ export default function App() {
   }
 
   return (
-    <AppStateProvider userId={session.userId}>
+    <AppStateProvider userId={session.userId} googleAccessToken={googleAccessToken}>
       <AppContent session={session} onSignOut={handleSignOut} />
     </AppStateProvider>
   );

@@ -711,3 +711,22 @@ export async function getWeeklyRecommendations(
     recommendations: recs.map(mapRecommendation),
   };
 }
+
+export async function syncCalendarEvents(
+  userId: string,
+  googleAccessToken: string
+): Promise<WeekEventsRequest> {
+  const response = await requestJson<{
+    events?: WeekEventApi[];
+  }>(`/users/${encodeURIComponent(userId)}/calendar/sync`, {
+    method: 'POST',
+    body: JSON.stringify({ google_access_token: googleAccessToken }),
+  });
+
+  const responseEvents = Array.isArray(response.events) ? response.events : [];
+  return {
+    events: responseEvents.map((event, index) =>
+      mapWeekEvent(event, dayOrder[index] ?? 'monday')
+    ),
+  };
+}
