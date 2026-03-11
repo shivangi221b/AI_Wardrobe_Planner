@@ -269,6 +269,7 @@ export function AppStateProvider({
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
+      searchGarmentCandidates,
       setCalendarConnected,
       setEventForDay,
       useDemoWeek,
