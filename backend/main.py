@@ -22,6 +22,7 @@ from .models import (
     GarmentFormality,
     GarmentItem,
     GarmentSeasonality,
+    build_garment_tags,
     MediaIngestionJob,
     MediaIngestionStatus,
     MediaType,
@@ -81,6 +82,7 @@ class AddGarmentRequest(BaseModel):
     category: GarmentCategory
     color: Optional[str] = None
     formality: Optional[GarmentFormality] = None
+    seasonality: Optional[GarmentSeasonality] = None
     primary_image_url: HttpUrl
 
 
@@ -192,6 +194,13 @@ def put_week_events(user_id: str, body: WeekEventsBody) -> WeekEventsBody:
 @app.post("/wardrobe/{user_id}/items", response_model=GarmentItem)
 def add_wardrobe_item(user_id: str, request: AddGarmentRequest) -> GarmentItem:
     now = datetime.utcnow()
+    formality = request.formality or GarmentFormality.CASUAL
+    seasonality = request.seasonality or GarmentSeasonality.ALL_SEASON
+    tags = build_garment_tags(
+        category=request.category,
+        formality=formality,
+        seasonality=seasonality,
+    )
     garment = GarmentItem(
         id=str(uuid4()),
         user_id=user_id,
@@ -199,7 +208,9 @@ def add_wardrobe_item(user_id: str, request: AddGarmentRequest) -> GarmentItem:
         category=request.category,
         sub_category=request.name,
         color_primary=request.color,
-        formality=request.formality,
+        formality=formality,
+        seasonality=seasonality,
+        tags=tags,
         created_at=now,
         updated_at=now,
     )

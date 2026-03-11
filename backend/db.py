@@ -12,6 +12,7 @@ from .models import (
     GarmentFormality,
     GarmentItem,
     GarmentSeasonality,
+    build_garment_tags,
 )
 
 _local_wardrobes: dict[str, List[GarmentItem]] = {}
@@ -91,23 +92,34 @@ def _parse_datetime(value: Any) -> datetime:
 
 
 def _row_to_garment(row: dict[str, Any]) -> GarmentItem:
+    category = _parse_category(row.get("category"))
+    formality = _parse_formality(row.get("formality"))
+    seasonality = _parse_seasonality(row.get("seasonality"))
+
+    raw_tags = row.get("tags")
+    if isinstance(raw_tags, list):
+        tags = [str(tag) for tag in raw_tags]
+    else:
+        tags = build_garment_tags(category, formality, seasonality)
+
     return GarmentItem(
         id=str(row.get("id")),
         user_id=str(row.get("user_id")),
         primary_image_url=str(row.get("primary_image_url")),
         alt_image_urls=row.get("alt_image_urls") or [],
-        category=_parse_category(row.get("category")),
+        category=category,
         sub_category=row.get("sub_category"),
         color_primary=row.get("color_primary"),
         color_secondary=row.get("color_secondary"),
         pattern=row.get("pattern"),
-        formality=_parse_formality(row.get("formality")),
-        seasonality=_parse_seasonality(row.get("seasonality")),
+        formality=formality,
+        seasonality=seasonality,
         brand=row.get("brand"),
         size=row.get("size"),
         material=row.get("material"),
         fit_notes=row.get("fit_notes"),
         embedding_id=row.get("embedding_id"),
+        tags=tags,
         created_at=_parse_datetime(row.get("created_at")),
         updated_at=_parse_datetime(row.get("updated_at")),
     )
@@ -129,13 +141,36 @@ def get_wardrobe(user_id: str) -> List[GarmentItem]:
     return [_row_to_garment(row) for row in rows]
 
 
+def _ensure_garment_tags(garment: GarmentItem) -> GarmentItem:
+    """Return a copy of *garment* with tags populated when missing or empty.
+
+    This keeps local-storage mode and Supabase-backed mode consistent: both
+    expose garments whose ``tags`` field always reflects the current
+    ``category``, ``formality``, and ``seasonality`` values.
+    """
+    if garment.tags:
+        return garment
+    return garment.model_copy(
+        update={
+            "tags": build_garment_tags(
+                garment.category,
+                garment.formality,
+                garment.seasonality,
+            )
+        }
+    )
+
+
 def insert_garment(garment: GarmentItem) -> GarmentItem:
+    garment = _ensure_garment_tags(garment)
     if _use_local_store():
         current = _local_wardrobes.get(garment.user_id, [])
         _local_wardrobes[garment.user_id] = [garment] + current
         return garment
-
+    # Supabase table may not yet have a dedicated "tags" column; drop it from
+    # the payload and let consumers recompute tags from the structured enums.
     payload = garment.model_dump(mode="json")
+    payload.pop("tags", None)
     result = get_supabase_client().table(_table_name()).insert(payload).execute()
     row = (result.data or [payload])[0]
     return _row_to_garment(row)
@@ -148,13 +183,14 @@ def set_wardrobe(user_id: str, items: List[GarmentItem]) -> None:
     deletes all existing rows then re-inserts, so use sparingly in production.
     """
     if _use_local_store():
-        _local_wardrobes[user_id] = list(items)
+        _local_wardrobes[user_id] = [ _ensure_garment_tags(g) for g in items ]
         return
 
     client = get_supabase_client()
     client.table(_table_name()).delete().eq("user_id", user_id).execute()
     for garment in items:
         payload = garment.model_dump(mode="json")
+        payload.pop("tags", None)
         client.table(_table_name()).insert(payload).execute()
 
 
