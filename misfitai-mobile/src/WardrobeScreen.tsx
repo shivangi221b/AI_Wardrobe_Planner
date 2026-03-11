@@ -16,6 +16,14 @@ import { getApiErrorMessage } from './api';
 import { getImageForGarment, shoesImage } from './stockImages';
 import { palette, radius, type } from './theme';
 
+const SEARCH_STATUS_MESSAGES = [
+  'Looking up the internet...',
+  'Asking the fashion goblins...',
+  'Rifling through digital closets...',
+  'Arguing with the algorithm about taste...',
+  'Dusting off runway archives...',
+];
+
 export function WardrobeScreen({
   onNext,
 }: {
@@ -33,7 +41,6 @@ export function WardrobeScreen({
 
   const [name, setName] = useState('');
   const [category, setCategory] = useState<'top' | 'bottom' | 'shoes' | 'accessory'>('top');
-  const [color, setColor] = useState('');
   const [formality, setFormality] = useState<
     'casual' | 'smart_casual' | 'business' | 'formal' | null
   >(null);
@@ -51,11 +58,11 @@ export function WardrobeScreen({
   const [searchMaterial, setSearchMaterial] = useState('');
   const [searchKind, setSearchKind] = useState('');
   const [searchFormality, setSearchFormality] = useState<
-    'casual' | 'smart_casual' | 'business' | 'formal'
-  >('casual');
+    'casual' | 'smart_casual' | 'business' | 'formal' | null
+  >(null);
   const [searchSeasonality, setSearchSeasonality] = useState<
-    'hot' | 'mild' | 'cold' | 'all_season'
-  >('all_season');
+    'hot' | 'mild' | 'cold' | 'all_season' | null
+  >(null);
   const [searching, setSearching] = useState(false);
   const [searchStatusIndex, setSearchStatusIndex] = useState(0);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -88,15 +95,8 @@ export function WardrobeScreen({
       setSearchStatusIndex(0);
       return;
     }
-    const messages = [
-      'Looking up the internet...',
-      'Asking the fashion goblins...',
-      'Rifling through digital closets...',
-      'Arguing with the algorithm about taste...',
-      'Dusting off runway archives...',
-    ];
     const id = setInterval(() => {
-      setSearchStatusIndex((current) => (current + 1) % messages.length);
+      setSearchStatusIndex((current) => (current + 1) % SEARCH_STATUS_MESSAGES.length);
     }, 2000);
     return () => clearInterval(id);
   }, [searching]);
@@ -112,12 +112,10 @@ export function WardrobeScreen({
       await addGarmentToWardrobe({
         name: name.trim(),
         category,
-        color: undefined,
         formality: formality ?? undefined,
         seasonality,
       });
       setName('');
-      setColor('');
       setFormality(null);
       setSeasonality('all_season');
     } catch {
@@ -193,15 +191,15 @@ export function WardrobeScreen({
         name: (selected.title || searchQuery || 'Garment').trim(),
         category: searchCategory,
         color: searchColor.trim(),
-        formality: searchFormality,
-        seasonality: searchSeasonality,
+        formality: searchFormality ?? undefined,
+        seasonality: searchSeasonality ?? undefined,
         imageUrl: selected.imageUrl,
       });
       setSearchQuery('');
       setSearchColor('');
       setSearchMaterial('');
       setSearchKind('');
-      setSearchFormality('casual');
+      setSearchFormality(null);
       setSearchSeasonality('all_season');
       setSearchResults([]);
       setSelectedSearchIndex(null);
@@ -464,7 +462,9 @@ export function WardrobeScreen({
                     return (
                       <Pressable
                         key={item}
-                        onPress={() => setSearchFormality(item)}
+                        onPress={() =>
+                          setSearchFormality((current) => (current === item ? null : item))
+                        }
                         style={[styles.chip, active && styles.chipActive]}
                       >
                         <Text style={[styles.chipText, active && styles.chipTextActive]}>
@@ -490,7 +490,9 @@ export function WardrobeScreen({
                     return (
                       <Pressable
                         key={item}
-                        onPress={() => setSearchSeasonality(item)}
+                        onPress={() =>
+                          setSearchSeasonality((current) => (current === item ? null : item))
+                        }
                         style={[styles.chip, active && styles.chipActive]}
                       >
                         <Text style={[styles.chipText, active && styles.chipTextActive]}>
@@ -511,13 +513,7 @@ export function WardrobeScreen({
               >
                 <Text style={styles.searchPrimaryButtonText}>
                   {searching
-                    ? [
-                        'Looking up the internet...',
-                        'Asking the fashion goblins...',
-                        'Rifling through digital closets...',
-                        'Arguing with the algorithm about taste...',
-                        'Dusting off runway archives...',
-                      ][searchStatusIndex]
+                    ? SEARCH_STATUS_MESSAGES[searchStatusIndex]
                     : 'Search'}
                 </Text>
               </Pressable>
@@ -660,7 +656,7 @@ export function WardrobeScreen({
               </View>
             </View>
 
-            <Text style={styles.label}>Seasonality (optional)</Text>
+                <Text style={styles.label}>Seasonality</Text>
             <View style={styles.chipRow}>
               {(['all_season', 'hot', 'mild', 'cold'] as const).map((item) => {
                 const active = seasonality === item;
