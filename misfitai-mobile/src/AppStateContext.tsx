@@ -1,5 +1,6 @@
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -146,18 +147,18 @@ export function AppStateProvider({
     };
   }, [userId]);
 
-  const setCalendarConnected = (connected: boolean) => {
+  const setCalendarConnected = useCallback((connected: boolean) => {
     setIsCalendarConnected(connected);
-  };
+  }, []);
 
-  const setEventForDay = (day: DayOfWeek, eventType: EventType) => {
+  const setEventForDay = useCallback((day: DayOfWeek, eventType: EventType) => {
     setEventsByDay((current) => ({
       ...current,
       [day]: eventType,
     }));
-  };
+  }, []);
 
-  const useDemoWeek = () => {
+  const useDemoWeek = useCallback(() => {
     setEventsByDay({
       monday: 'work_meeting',
       tuesday: 'work_meeting',
@@ -167,9 +168,9 @@ export function AppStateProvider({
       saturday: 'casual',
       sunday: 'none',
     });
-  };
+  }, []);
 
-  const generateRecommendations = async () => {
+  const generateRecommendations = useCallback(async () => {
     const events: CalendarEvent[] = dayOrder.map((day, index) => ({
       id: 'event-' + index,
       day,
@@ -182,9 +183,9 @@ export function AppStateProvider({
         (a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day)
       )
     );
-  };
+  }, [userId, eventsByDay]);
 
-  const addGarmentToWardrobe = async (payload: {
+  const addGarmentToWardrobe = useCallback(async (payload: {
     name: string;
     category: 'top' | 'bottom' | 'shoes' | 'accessory';
     color?: string;
@@ -198,9 +199,9 @@ export function AppStateProvider({
       }
       return current.map((item) => (item.id === created.id ? created : item));
     });
-  };
+  }, [userId]);
 
-  const addGarmentViaVision = async (payload: VisionAddPayload): Promise<void> => {
+  const addGarmentViaVision = useCallback(async (payload: VisionAddPayload): Promise<void> => {
     const createdItems = await addGarmentFromVision(userId, payload);
     setGarments((current) => {
       const byId = new Map(current.map((item) => [item.id, item]));
@@ -209,28 +210,32 @@ export function AppStateProvider({
       });
       return Array.from(byId.values());
     });
-  };
+  }, [userId]);
 
-  const searchGarmentCandidates = async (
-    query: string,
-    limit = 20,
-    options?: GarmentSearchOptions
-  ): Promise<GarmentSearchResult[]> => {
-    return searchGarmentImages(userId, query, limit, options);
-  };
+  const searchGarmentCandidates = useCallback(
+    async (
+      query: string,
+      limit = 20,
+      options?: GarmentSearchOptions
+    ): Promise<GarmentSearchResult[]> => {
+      return searchGarmentImages(userId, query, limit, options);
+    },
+    [userId]
+  );
 
-  const addGarmentViaSearch = async (
-    payload: ConfirmSearchAddPayload
-  ): Promise<void> => {
-    const created = await confirmSearchAdd(userId, payload);
-    setGarments((current) => {
-      const existingIndex = current.findIndex((item) => item.id === created.id);
-      if (existingIndex === -1) {
-        return current.concat(created);
-      }
-      return current.map((item) => (item.id === created.id ? created : item));
-    });
-  };
+  const addGarmentViaSearch = useCallback(
+    async (payload: ConfirmSearchAddPayload): Promise<void> => {
+      const created = await confirmSearchAdd(userId, payload);
+      setGarments((current) => {
+        const existingIndex = current.findIndex((item) => item.id === created.id);
+        if (existingIndex === -1) {
+          return current.concat(created);
+        }
+        return current.map((item) => (item.id === created.id ? created : item));
+      });
+    },
+    [userId]
+  );
 
   const value: AppState = useMemo(
     () => ({
@@ -256,13 +261,13 @@ export function AppStateProvider({
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
-      searchGarmentCandidates,
       setCalendarConnected,
       setEventForDay,
       useDemoWeek,
       generateRecommendations,
       addGarmentToWardrobe,
       addGarmentViaVision,
+      searchGarmentCandidates,
       addGarmentViaSearch,
     ]
   );
