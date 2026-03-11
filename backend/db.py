@@ -141,7 +141,28 @@ def get_wardrobe(user_id: str) -> List[GarmentItem]:
     return [_row_to_garment(row) for row in rows]
 
 
+def _ensure_garment_tags(garment: GarmentItem) -> GarmentItem:
+    """Return a copy of *garment* with tags populated when missing or empty.
+
+    This keeps local-storage mode and Supabase-backed mode consistent: both
+    expose garments whose ``tags`` field always reflects the current
+    ``category``, ``formality``, and ``seasonality`` values.
+    """
+    if garment.tags:
+        return garment
+    return garment.model_copy(
+        update={
+            "tags": build_garment_tags(
+                garment.category,
+                garment.formality,
+                garment.seasonality,
+            )
+        }
+    )
+
+
 def insert_garment(garment: GarmentItem) -> GarmentItem:
+    garment = _ensure_garment_tags(garment)
     if _use_local_store():
         current = _local_wardrobes.get(garment.user_id, [])
         _local_wardrobes[garment.user_id] = [garment] + current
@@ -162,7 +183,7 @@ def set_wardrobe(user_id: str, items: List[GarmentItem]) -> None:
     deletes all existing rows then re-inserts, so use sparingly in production.
     """
     if _use_local_store():
-        _local_wardrobes[user_id] = list(items)
+        _local_wardrobes[user_id] = [ _ensure_garment_tags(g) for g in items ]
         return
 
     client = get_supabase_client()
