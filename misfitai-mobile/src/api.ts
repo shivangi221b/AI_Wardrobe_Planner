@@ -65,6 +65,9 @@ interface WardrobeApiItem {
   color_secondary?: string | null;
   formality?: string | null;
   primary_image_url?: string;
+  pattern?: string | null;
+  material?: string | null;
+  fit_notes?: string | null;
 }
 
 interface WeekEventApi {
@@ -222,6 +225,9 @@ function mapGarment(item: WardrobeApiItem): Garment {
     color: (item.color || item.color_primary || item.color_secondary || '').trim(),
     formality: normalizeFormality(item.formality),
     primaryImageUrl: item.primary_image_url,
+    pattern: item.pattern ?? undefined,
+    material: item.material ?? undefined,
+    fitNotes: item.fit_notes ?? undefined,
   };
 }
 

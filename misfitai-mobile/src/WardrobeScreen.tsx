@@ -666,6 +666,15 @@ export function WardrobeScreen({
                       {garment.category} / {garment.formality.replace('_', ' ')}
                     </Text>
                     <Text style={styles.cardMeta}>{garment.color || 'neutral tone'}</Text>
+                    {garment.pattern ? (
+                      <Text style={styles.cardMeta}>Pattern: {garment.pattern}</Text>
+                    ) : null}
+                    {garment.material ? (
+                      <Text style={styles.cardMeta}>Material: {garment.material}</Text>
+                    ) : null}
+                    {garment.fitNotes ? (
+                      <Text style={styles.cardMeta}>Fit: {garment.fitNotes}</Text>
+                    ) : null}
                   </View>
                 </View>
               ))}

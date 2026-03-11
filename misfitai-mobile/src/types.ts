@@ -17,6 +17,10 @@ export interface Garment {
   color: string;
   formality: GarmentFormality;
   primaryImageUrl?: string;
+  // Optional richer metadata when available (e.g. from vision onboarding).
+  pattern?: string;
+  material?: string;
+  fitNotes?: string;
 }
 
 export type EventType =

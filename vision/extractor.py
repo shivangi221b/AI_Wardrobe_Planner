@@ -24,6 +24,9 @@ class ExtractedGarmentAsset:
     category: str
     sub_category: Optional[str]
     color_primary: Optional[str]
+    pattern: Optional[str]
+    material: Optional[str]
+    fit_style: Optional[str]
     formality: Optional[str]
     seasonality: Optional[str]
 
@@ -58,8 +61,12 @@ def _build_prompt() -> str:
         "    {\n"
         '      "description": "rich natural-language description of the garment suitable for generating a product photo",\n'
         '      "category": "top|bottom|dress|outerwear|shoes|accessory",\n'
-        '      "sub_category": "short text",\n'
+        '      "item_type": "short text for the specific garment type, e.g. crewneck sweater, straight-leg jeans",\n'
+        '      "sub_category": "optional shorter label for item_type",\n'
         '      "color_primary": "short color",\n'
+        '      "pattern": "e.g. solid, striped, plaid, floral, graphic, logo, colorblock, etc.",\n'
+        '      "material": "e.g. cotton, linen, wool, denim, leather, synthetic, knit, etc. If unsure, best guess.",\n'
+        '      "fit_style": "short fit/style descriptors, e.g. oversized, relaxed, slim fit, cropped, wide-leg",\n'
         '      "formality": "casual|smart_casual|business|formal",\n'
         '      "seasonality": "hot|mild|cold|all_season"\n'
         "    }\n"
@@ -69,6 +76,8 @@ def _build_prompt() -> str:
         "- Return one entry per garment item you can see.\n"
         "- If uncertain, still choose the closest valid category.\n"
         "- The description must describe the full garment, even if only partially visible (infer likely full shape).\n"
+        "- \"item_type\" should be something a shopper would recognize for this garment (e.g. \"oxford shirt\", \"straight-leg jeans\").\n"
+        "- If you truly cannot determine pattern/material/fit_style, still return a best-effort guess instead of null.\n"
         "- Output JSON only, no markdown."
     )
 
@@ -109,15 +118,36 @@ def extract_garments_from_image(image_bytes: bytes, mime_type: str = "image/jpeg
         if not description:
             continue
 
-        # Generate a polished catalog-style asset from the description.
-        image_out = generate_garment_image(description)
+        # Pull structured metadata for prompt construction.
+        item_type = str(
+            raw_item.get("item_type")
+            or raw_item.get("sub_category")
+            or raw_item.get("category")
+            or "garment"
+        ).strip()
+        color_primary = (str(raw_item.get("color_primary")) if raw_item.get("color_primary") else None)
+        pattern = (str(raw_item.get("pattern")) if raw_item.get("pattern") else None)
+        material = (str(raw_item.get("material")) if raw_item.get("material") else None)
+        fit_style = (str(raw_item.get("fit_style")) if raw_item.get("fit_style") else None)
+
+        # Generate a polished catalog-style asset from structured metadata.
+        image_out = generate_garment_image(
+            item_type=item_type,
+            color=color_primary,
+            pattern=pattern,
+            material=material,
+            fit_style=fit_style,
+        )
         assets.append(
             ExtractedGarmentAsset(
                 image_bytes=image_out,
                 description=description,
                 category=str(raw_item.get("category") or "top"),
                 sub_category=(str(raw_item.get("sub_category")) if raw_item.get("sub_category") else None),
-                color_primary=(str(raw_item.get("color_primary")) if raw_item.get("color_primary") else None),
+                color_primary=color_primary,
+                pattern=pattern,
+                material=material,
+                fit_style=fit_style,
                 formality=(str(raw_item.get("formality")) if raw_item.get("formality") else None),
                 seasonality=(str(raw_item.get("seasonality")) if raw_item.get("seasonality") else None),
             )
