@@ -1,7 +1,0 @@
-{
-  "name": "ai-wardrobe-planner",
-  "private": true,
-  "dependencies": {
-    "expo": "~55.0.5"
-  }
-}

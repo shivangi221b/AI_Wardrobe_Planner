@@ -8,16 +8,19 @@ base64 data so the REST endpoint can process them without GCS.
 
 Environment variables
 ---------------------
-VERTEXAI_API_KEY   Required. Raises at import time if absent.
+VERTEX_AI_API_KEY   Required at call time. Missing key returns the fallback
+                    template so the server can still start without it.
 VERTEX_AI_MODEL     Optional. Defaults to "gemini-3.1-pro-preview".
 """
 
 from __future__ import annotations
 
 import base64
+import ipaddress
 import logging
 import os
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -29,18 +32,81 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-_api_key = os.getenv("VERTEXAI_API_KEY")
-if not _api_key:
-    raise EnvironmentError(
-        "VERTEX_AI_API_KEY environment variable is not set. "
-        "Set it before starting the server."
+_model = os.getenv("VERTEX_AI_MODEL", "gemini-3.1-pro-preview")
+
+# API key and endpoint URL are resolved lazily at call time so that missing
+# VERTEX_AI_API_KEY does not prevent the server from starting.
+def _get_endpoint_url() -> Optional[str]:
+    api_key = os.getenv("VERTEX_AI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    return (
+        f"https://aiplatform.googleapis.com/v1/publishers/google/models/"
+        f"{_model}:generateContent?key={api_key}"
     )
 
-_model = os.getenv("VERTEX_AI_MODEL", "gemini-3.1-pro-preview")
-_endpoint_url = (
-    f"https://aiplatform.googleapis.com/v1/publishers/google/models/"
-    f"{_model}:generateContent?key={_api_key}"
+# ---------------------------------------------------------------------------
+# Shared HTTP client — reused across all requests for connection pooling.
+# ---------------------------------------------------------------------------
+
+_http_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
 )
+
+# ---------------------------------------------------------------------------
+# SSRF protection
+# ---------------------------------------------------------------------------
+
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
+
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / cloud metadata
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+_BLOCKED_HOSTNAMES = frozenset(
+    {
+        "metadata.google.internal",
+        "169.254.169.254",
+        "metadata.azure.com",
+        "100.100.100.200",  # Alibaba Cloud metadata
+    }
+)
+
+
+def _is_safe_image_url(url: str) -> bool:
+    """Return True only for http/https URLs that don't target private infrastructure.
+
+    Note: this validates the URL as-supplied and does not prevent DNS rebinding.
+    It is a best-effort guard against the most common SSRF vectors.
+    """
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return False
+        if hostname in _BLOCKED_HOSTNAMES:
+            return False
+        # If the hostname is an IP literal, reject private/reserved ranges.
+        try:
+            addr = ipaddress.ip_address(hostname)
+            return not any(addr in net for net in _PRIVATE_NETWORKS)
+        except ValueError:
+            pass  # It's a regular hostname — allowed.
+    except Exception:
+        return False
+    return True
+
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -86,14 +152,25 @@ def _describe_item(label: str, item: Optional[GarmentItem]) -> str:
 
 
 async def _fetch_image_as_inline_data(url: str) -> Optional[dict]:
-    """Download an image from *url* and return a Gemini inlineData part."""
+    """Download an image from *url* and return a Gemini inlineData part.
+
+    Returns None (and logs a warning) if the URL fails SSRF validation,
+    the request fails, or the response exceeds _MAX_IMAGE_BYTES.
+    """
+    if not _is_safe_image_url(url):
+        logger.warning("Skipping image fetch for disallowed URL: %s", url)
+        return None
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
-            encoded = base64.b64encode(resp.content).decode("utf-8")
-            return {"inlineData": {"mimeType": mime, "data": encoded}}
+        resp = await _http_client.get(url, timeout=10.0)
+        resp.raise_for_status()
+        if len(resp.content) > _MAX_IMAGE_BYTES:
+            logger.warning(
+                "Skipping oversized garment image %s (%d bytes)", url, len(resp.content)
+            )
+            return None
+        mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        encoded = base64.b64encode(resp.content).decode("utf-8")
+        return {"inlineData": {"mimeType": mime, "data": encoded}}
     except Exception as exc:
         logger.debug("Could not fetch garment image %s: %s", url, exc)
         return None
@@ -131,9 +208,19 @@ async def generate_outfit_explanation(
 
     Returns:
         A single natural-language sentence. Falls back to a safe template
-        string if the API call fails so the endpoint never crashes.
+        string if VERTEX_AI_API_KEY is missing or the API call fails so the
+        endpoint never crashes.
     """
     event_label = event_type.replace("_", " ")
+
+    endpoint_url = _get_endpoint_url()
+    if not endpoint_url:
+        logger.warning(
+            "VERTEX_AI_API_KEY is not set; returning fallback for %s %s",
+            day,
+            event_type,
+        )
+        return _FALLBACK_TEMPLATE.format(day=day, event_type=event_label)
 
     text_content = (
         f"Day: {day} | Event: {event_label}\n"
@@ -162,12 +249,11 @@ async def generate_outfit_explanation(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(_endpoint_url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            return text.strip()
+        response = await _http_client.post(endpoint_url, json=payload, timeout=30.0)
+        response.raise_for_status()
+        data = response.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return text.strip()
     except Exception as exc:
         logger.warning(
             "LLM explanation generation failed for %s %s: %s",

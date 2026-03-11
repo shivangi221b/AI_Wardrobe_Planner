@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 _week_events: dict[str, List[WeekEvent]] = {}
 
 
+def get_week_events(user_id: str) -> List[WeekEvent]:
+    """Return the current week plan for *user_id*, or an empty list."""
+    return list(_week_events.get(user_id, []))
+
+
 def store_week_events(user_id: str, events: List[WeekEvent]) -> None:
     """Persist (overwrite) the week plan for *user_id*."""
     _week_events[user_id] = list(events)
@@ -39,6 +44,7 @@ __all__ = [
     "get_wardrobe",
     "set_wardrobe",
     "add_garments",
+    "get_week_events",
     "store_week_events",
     "user_exists",
     "upload_garment_image",

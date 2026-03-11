@@ -161,7 +161,12 @@ def set_wardrobe(user_id: str, items: List[GarmentItem]) -> None:
 def add_garments(user_id: str, items: List[GarmentItem]) -> None:
     """Append *items* to the wardrobe for *user_id*.
 
+    Each garment's user_id is overridden with the supplied *user_id* before
+    insertion so that a mismatched GarmentItem.user_id can never silently
+    write under a different owner.
+
     Intended for use by the ingestion worker once it finishes processing a job.
     """
     for garment in items:
-        insert_garment(garment)
+        enforced = garment.model_copy(update={"user_id": user_id})
+        insert_garment(enforced)

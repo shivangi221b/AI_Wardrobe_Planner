@@ -28,8 +28,7 @@ from .models import (
     WeekEvent,
 )
 from .routers import recommendations, weather_router
-from .storage import get_wardrobe, store_week_events
-from .storage import _week_events as _week_events_store
+from .storage import get_wardrobe, get_week_events as _storage_get_week_events, store_week_events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -176,8 +175,7 @@ class WeekEventsBody(BaseModel):
 
 @app.get("/users/{user_id}/week-events", response_model=WeekEventsBody)
 def get_week_events(user_id: str) -> WeekEventsBody:
-    events = list(_week_events_store.get(user_id, []))
-    return WeekEventsBody(events=events)
+    return WeekEventsBody(events=_storage_get_week_events(user_id))
 
 
 @app.put("/users/{user_id}/week-events", response_model=WeekEventsBody)
