@@ -1,5 +1,8 @@
 """
-recommendation.py — Pure rules-based outfit recommendation engine.
+recommendation.py — Outfit recommendation engine.
+
+Garment selection is rules-based (formality matching + priority fallback).
+Explanation generation is delegated to the LLM via ``backend.llm``.
 
 Deliberately free of FastAPI imports so it can be unit-tested in isolation.
 Weather/location logic is intentionally out of scope for the MVP; the WeekEvent
@@ -10,6 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .llm import generate_outfit_explanation
 from .models import DayOutfitSuggestion, GarmentItem, WeekEvent
 
 # ---------------------------------------------------------------------------
@@ -38,35 +42,6 @@ _EVENT_FORMALITY: dict[str, frozenset[str]] = {
 }
 
 _FALLBACK_FORMALITY: frozenset[str] = frozenset({"casual"})
-
-# ---------------------------------------------------------------------------
-# Explanation templates
-# ---------------------------------------------------------------------------
-
-_EXPLANATION_TEMPLATES: dict[str, str] = {
-    "work_meeting": (
-        "For your {day} work meeting, we picked a {top_name} and {bottom_name} "
-        "from your wardrobe to keep you polished and professional."
-    ),
-    "date_night": (
-        "For your {day} date night, we went with a smart-casual {top_name} and "
-        "{bottom_name} to keep things stylish yet relaxed."
-    ),
-    "gym": (
-        "Keeping it comfortable for your {day} gym session — a {top_name} and "
-        "{bottom_name} to keep you moving."
-    ),
-    "casual": (
-        "Casual and easy for {day} — a {top_name} paired with {bottom_name} "
-        "for a no-fuss look."
-    ),
-}
-
-_MISSING_TEMPLATE = (
-    "We couldn't find a perfect match for your {day} {event_type} — "
-    "consider adding more items to your wardrobe."
-)
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -113,32 +88,26 @@ def _pick_garment(
     unused = [g for g in matching_category if g.id not in used_ids]
     used = [g for g in matching_category if g.id in used_ids]
 
-    # Priority 1 & 2 — prefer unused
     unused_formal = [g for g in unused if formality_matches(g)]
     if unused_formal:
         return unused_formal[0]
     if unused:
         return unused[0]
 
-    # Priority 3 & 4 — allow repeat if no unused option
     used_formal = [g for g in used if formality_matches(g)]
     if used_formal:
         return used_formal[0]
     return used[0]
 
 
-def _build_explanation(
-    day: str,
-    event_type: str,
-    top_name: Optional[str],
-    bottom_name: Optional[str],
-) -> str:
-    missing = top_name is None or bottom_name is None
-    if missing:
-        return _MISSING_TEMPLATE.format(day=day, event_type=event_type)
-
-    template = _EXPLANATION_TEMPLATES.get(event_type, _EXPLANATION_TEMPLATES["casual"])
-    return template.format(day=day, top_name=top_name, bottom_name=bottom_name)
+def _display_name(item: Optional[GarmentItem]) -> Optional[str]:
+    """Return a human-readable name for a garment, or None if item is absent."""
+    if item is None:
+        return None
+    name = item.sub_category or item.category.value
+    if item.brand:
+        name = f"{item.brand} {name}"
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -146,12 +115,15 @@ def _build_explanation(
 # ---------------------------------------------------------------------------
 
 
-def generate_week_recommendations(
+async def generate_week_recommendations(
     wardrobe: list[GarmentItem],
     events: list[WeekEvent],
 ) -> list[DayOutfitSuggestion]:
     """
     Generate one :class:`DayOutfitSuggestion` per event in *events*.
+
+    Garment selection is rules-based; explanation text is produced by the
+    LLM (with garment images forwarded when available).
 
     Args:
         wardrobe: All garments belonging to the user. May be empty.
@@ -160,7 +132,7 @@ def generate_week_recommendations(
     Returns:
         A list of :class:`DayOutfitSuggestion` objects in the same order as
         *events*.  Never raises — edge cases (empty wardrobe, unknown event
-        type, missing category) produce graceful "No item found" responses.
+        type, missing category, LLM failure) produce graceful responses.
     """
     used_ids: set[str] = set()
     recommendations: list[DayOutfitSuggestion] = []
@@ -171,17 +143,14 @@ def generate_week_recommendations(
         top = _pick_garment(wardrobe, _is_top, preferred, used_ids)
         bottom = _pick_garment(wardrobe, _is_bottom, preferred, used_ids)
 
+        # LLM generates the explanation; garment image URLs are forwarded
+        # inside generate_outfit_explanation when present.
+        explanation = await generate_outfit_explanation(
+            event.day, event.event_type, top, bottom
+        )
+
         top_id = top.id if top else None
-        top_name = (top.sub_category or top.category.value) if top else None
-        if top and top.brand:
-            top_name = f"{top.brand} {top_name}"
-
         bottom_id = bottom.id if bottom else None
-        bottom_name = (bottom.sub_category or bottom.category.value) if bottom else None
-        if bottom and bottom.brand:
-            bottom_name = f"{bottom.brand} {bottom_name}"
-
-        explanation = _build_explanation(event.day, event.event_type, top_name, bottom_name)
 
         if top_id:
             used_ids.add(top_id)
@@ -194,8 +163,8 @@ def generate_week_recommendations(
                 event_type=event.event_type,
                 top_id=top_id,
                 bottom_id=bottom_id,
-                top_name=top_name or "No item found",
-                bottom_name=bottom_name or "No item found",
+                top_name=_display_name(top) or "No item found",
+                bottom_name=_display_name(bottom) or "No item found",
                 explanation=explanation,
             )
         )

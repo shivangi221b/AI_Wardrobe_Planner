@@ -75,7 +75,7 @@ async def recommend_week(
     #     else:
     #         ctx = WeatherContext()
 
-    day_recommendations: list[DayOutfitSuggestion] = generate_week_recommendations(
+    day_recommendations: list[DayOutfitSuggestion] = await generate_week_recommendations(
         wardrobe, request.events
     )
 

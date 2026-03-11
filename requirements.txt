@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 pydantic
+openai
 
 numpy
 opencv-python-headless
