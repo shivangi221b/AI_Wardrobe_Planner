@@ -1,15 +1,15 @@
 """
 tests/test_recommendations_e2e.py — End-to-end tests for POST /recommendations/week.
 
-Requires a real OPENAI_API_KEY in the environment.  The entire module is
+Requires a real VERTEX_AI_API_KEY in the environment.  The entire module is
 skipped automatically when the key is absent so CI runs that don't have
 the secret still pass.
 
 Run:
-    OPENAI_API_KEY=sk-... pytest tests/test_recommendations_e2e.py -v
+    VERTEX_AI_API_KEY=... pytest tests/test_recommendations_e2e.py -v
 
-Override model (cheaper during dev):
-    OPENAI_API_KEY=sk-... OPENAI_MODEL=gpt-4o-mini pytest tests/test_recommendations_e2e.py -v
+Override model (during dev):
+    VERTEX_AI_API_KEY=... VERTEX_AI_MODEL=gemini-3.1-pro-preview pytest tests/test_recommendations_e2e.py -v
 """
 
 from __future__ import annotations
@@ -20,10 +20,10 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Module-level skip — must happen BEFORE backend imports because llm.py
-# validates OPENAI_API_KEY at import time and raises EnvironmentError.
+# validates VERTEX_AI_API_KEY at import time and raises EnvironmentError.
 # ---------------------------------------------------------------------------
-if not os.getenv("OPENAI_API_KEY"):
-    pytest.skip("OPENAI_API_KEY is not set — skipping e2e tests", allow_module_level=True)
+if not os.getenv("VERTEX_AI_API_KEY"):
+    pytest.skip("VERTEX_AI_API_KEY is not set — skipping e2e tests", allow_module_level=True)
 
 from datetime import datetime  # noqa: E402 (import after env check)
 

@@ -1,44 +1,46 @@
 """
 llm.py — LLM client for outfit explanation generation.
 
-Uses OpenAI gpt-4o (vision-capable) to produce a single natural-language
-sentence explaining why the selected top and bottom suit the occasion.
-Garment images are forwarded to the model when available, filling the
-image-consumption gap in the recommendation pipeline.
+Uses Google Vertex AI (Gemini) to produce a single natural-language sentence
+explaining why the selected top and bottom suit the occasion.
+Garment images are forwarded to the model when available, encoded as inline
+base64 data so the REST endpoint can process them without GCS.
 
 Environment variables
 ---------------------
-OPENAI_API_KEY  Required. Raises at import time if absent.
-OPENAI_MODEL    Optional. Defaults to "gpt-4o". Override to "gpt-4o-mini"
-                for cost reduction during development.
+VERTEX_AI_API_KEY   Required. Raises at import time if absent.
+VERTEX_AI_MODEL     Optional. Defaults to "gemini-3.1-pro-preview".
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 from typing import Optional
 
-from openai import AsyncOpenAI
+import httpx
 
 from .models import GarmentItem
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Client initialisation
+# Configuration
 # ---------------------------------------------------------------------------
 
-_api_key = os.getenv("OPENAI_API_KEY")
+_api_key = os.getenv("VERTEX_AI_API_KEY")
 if not _api_key:
     raise EnvironmentError(
-        "OPENAI_API_KEY environment variable is not set. "
+        "VERTEX_AI_API_KEY environment variable is not set. "
         "Set it before starting the server."
     )
 
-_model = os.getenv("OPENAI_MODEL", "gpt-4o")
-
-_client = AsyncOpenAI(api_key=_api_key)
+_model = os.getenv("VERTEX_AI_MODEL", "gemini-3.1-pro-preview")
+_endpoint_url = (
+    f"https://aiplatform.googleapis.com/v1/publishers/google/models/"
+    f"{_model}:generateContent?key={_api_key}"
+)
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -83,14 +85,28 @@ def _describe_item(label: str, item: Optional[GarmentItem]) -> str:
     return f"{label}: {' — '.join(parts)}"
 
 
-def _image_block(item: Optional[GarmentItem]) -> Optional[dict]:
-    """Return an OpenAI image_url content block if the item has an image URL."""
+async def _fetch_image_as_inline_data(url: str) -> Optional[dict]:
+    """Download an image from *url* and return a Gemini inlineData part."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+            encoded = base64.b64encode(resp.content).decode("utf-8")
+            return {"inlineData": {"mimeType": mime, "data": encoded}}
+    except Exception as exc:
+        logger.debug("Could not fetch garment image %s: %s", url, exc)
+        return None
+
+
+async def _image_part(item: Optional[GarmentItem]) -> Optional[dict]:
+    """Return a Gemini inlineData part for the item's image, or None."""
     if item is None:
         return None
     url = str(item.primary_image_url) if item.primary_image_url else None
     if not url:
         return None
-    return {"type": "image_url", "image_url": {"url": url, "detail": "low"}}
+    return await _fetch_image_as_inline_data(url)
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +121,7 @@ async def generate_outfit_explanation(
     bottom: Optional[GarmentItem],
 ) -> str:
     """
-    Call the LLM to generate a one-sentence outfit explanation.
+    Call the Vertex AI Gemini model to generate a one-sentence outfit explanation.
 
     Args:
         day:        Day of the week, e.g. ``"Monday"``.
@@ -119,33 +135,39 @@ async def generate_outfit_explanation(
     """
     event_label = event_type.replace("_", " ")
 
-    # Build the user text content
     text_content = (
         f"Day: {day} | Event: {event_label}\n"
         f"{_describe_item('Top', top)}\n"
         f"{_describe_item('Bottom', bottom)}"
     )
 
-    # Assemble the user message — text first, then optional images
-    user_content: list[dict] = [{"type": "text", "text": text_content}]
+    # Build user parts: text first, then optional inline images
+    user_parts: list[dict] = [{"text": text_content}]
 
-    for block in (_image_block(top), _image_block(bottom)):
-        if block is not None:
-            user_content.append(block)
+    for part in [await _image_part(top), await _image_part(bottom)]:
+        if part is not None:
+            user_parts.append(part)
 
-    messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
-    ]
+    payload = {
+        "systemInstruction": {
+            "parts": [{"text": _SYSTEM_PROMPT}]
+        },
+        "contents": [
+            {"role": "user", "parts": user_parts}
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 120,
+            "temperature": 0.7,
+        },
+    }
 
     try:
-        response = await _client.chat.completions.create(
-            model=_model,
-            messages=messages,
-            max_tokens=120,
-            temperature=0.7,
-        )
-        return response.choices[0].message.content.strip()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(_endpoint_url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            return text.strip()
     except Exception as exc:
         logger.warning(
             "LLM explanation generation failed for %s %s: %s",
