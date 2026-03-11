@@ -12,7 +12,7 @@ import {
 import { useAppState } from './AppStateContext';
 import { dayLabels, dayOrder, eventTypeLabels } from './constants';
 import { getFitSignals, getScheduleChips } from './lookUtils';
-import { getImageForGarment, outerwearImage, shoesImage } from './stockImages';
+import { getImageForGarment } from './stockImages';
 import type { DayOfWeek } from './types';
 import { palette, radius, type } from './theme';
 
@@ -93,19 +93,48 @@ export function WeeklyPlanScreen({
   const bottomGarment = selectedRecommendation
     ? garments.find((item) => item.id === selectedRecommendation.outfit.bottomId)
     : undefined;
+  const outerwearGarment = garments.find((item) => item.category === 'outerwear');
+  const shoesGarment = garments.find((item) => item.category === 'shoes');
 
-  const topName = selectedRecommendation?.outfit.topName || topGarment?.name || 'Cream sweater';
-  const bottomName =
-    selectedRecommendation?.outfit.bottomName || bottomGarment?.name || 'Dark trousers';
+  const topName = selectedRecommendation?.outfit.topName || topGarment?.name || '';
+  const bottomName = selectedRecommendation?.outfit.bottomName || bottomGarment?.name || '';
 
-  const collagePieces = [
-    { name: topName, image: getImageForGarment(topName, 'top') },
-    { name: bottomName, image: getImageForGarment(bottomName, 'bottom') },
-    { name: 'Beige coat', image: outerwearImage },
-    { name: 'Brown loafers', image: shoesImage },
-  ];
+  type CollagePiece = { name: string; image: { uri: string } | ReturnType<typeof getImageForGarment> };
+  const collagePieces: CollagePiece[] = [];
+  if (topName) {
+    collagePieces.push({
+      name: topName,
+      image: topGarment?.primaryImageUrl
+        ? { uri: topGarment.primaryImageUrl }
+        : getImageForGarment(topName, 'top'),
+    });
+  }
+  if (bottomName) {
+    collagePieces.push({
+      name: bottomName,
+      image: bottomGarment?.primaryImageUrl
+        ? { uri: bottomGarment.primaryImageUrl }
+        : getImageForGarment(bottomName, 'bottom'),
+    });
+  }
+  if (outerwearGarment) {
+    collagePieces.push({
+      name: outerwearGarment.name,
+      image: outerwearGarment.primaryImageUrl
+        ? { uri: outerwearGarment.primaryImageUrl }
+        : getImageForGarment(outerwearGarment.name, 'outerwear'),
+    });
+  }
+  if (shoesGarment) {
+    collagePieces.push({
+      name: shoesGarment.name,
+      image: shoesGarment.primaryImageUrl
+        ? { uri: shoesGarment.primaryImageUrl }
+        : getImageForGarment(shoesGarment.name, 'shoes'),
+    });
+  }
 
-  const scheduleChips = selectedRecommendation ? getScheduleChips(selectedRecommendation.day) : [];
+  const scheduleChips = selectedRecommendation ? getScheduleChips(selectedRecommendation.eventType) : [];
   const fitSignals = selectedRecommendation ? getFitSignals(selectedRecommendation.eventType) : [];
 
   return (

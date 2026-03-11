@@ -79,8 +79,7 @@ export function EventsScreen({
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Text style={styles.screenTitle}>Shape the week</Text>
         <Text style={styles.screenSubtitle}>
-          Calendar sync is mocked for MVP. Set one event per day and generate seven minimalist
-          looks from your wardrobe.
+          Set one event per day and generate seven minimalist looks from your wardrobe.
         </Text>
 
         <View style={styles.actionsRow}>

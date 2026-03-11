@@ -1,17 +1,19 @@
-import type { DayOfWeek, EventType } from './types';
+import type { EventType } from './types';
 
-export function getScheduleChips(day: DayOfWeek): string[] {
-  const byDay: Record<DayOfWeek, string[]> = {
-    monday: ['10am Class', '1-5pm Internship', '6pm Dinner', '52F - Light rain'],
-    tuesday: ['9am Lecture', '12pm Lab', '4pm Study Group', '49F - Cloudy'],
-    wednesday: ['11am Seminar', '2pm Office Hours', '7pm Cafe', '55F - Breezy'],
-    thursday: ['10am Class', '3pm Team Meet', '6pm Networking', '58F - Clear'],
-    friday: ['9am Workshop', '1pm Internship', '8pm Date Night', '54F - Chill'],
-    saturday: ['11am Brunch', '2pm Errands', '7pm Hangout', '61F - Sunny'],
-    sunday: ['10am Reset', '2pm Library', '6pm Meal Prep', '50F - Windy'],
-  };
-
-  return byDay[day];
+export function getScheduleChips(eventType: EventType): string[] {
+  switch (eventType) {
+    case 'work_meeting':
+      return ['Work meeting', 'Business casual', 'Professional setting'];
+    case 'date_night':
+      return ['Date night', 'Evening out', 'Smart elevated'];
+    case 'gym':
+      return ['Gym session', 'Active wear', 'Move-all-day'];
+    case 'casual':
+      return ['Casual day', 'Relaxed fit', 'Easy going'];
+    case 'none':
+    default:
+      return ['No major event', 'Flexible style', 'Everyday wear'];
+  }
 }
 
 export function getFitSignals(eventType: EventType): Array<{ label: string; value: string }> {

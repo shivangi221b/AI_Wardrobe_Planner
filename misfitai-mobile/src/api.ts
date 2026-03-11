@@ -13,26 +13,17 @@ import type {
 
 const DEFAULT_API_BASE_URL =
   Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000';
-const env = (
-  globalThis as {
-    process?: {
-      env?: Record<string, string | undefined>;
-    };
-  }
-).process?.env;
 
 export const API_BASE_URL = (
-  env?.EXPO_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL
+  process.env.EXPO_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL
 ).replace(/\/$/, '');
 
-const useMockApi =
-  env?.EXPO_PUBLIC_USE_MOCK_API === 'true'
+export const USE_MOCK_API =
+  process.env.EXPO_PUBLIC_USE_MOCK_API === 'true'
     ? true
-    : env?.EXPO_PUBLIC_USE_MOCK_API === 'false'
+    : process.env.EXPO_PUBLIC_USE_MOCK_API === 'false'
       ? false
       : __DEV__;
-
-export const USE_MOCK_API = useMockApi;
 const validEventTypes: EventType[] = [
   'work_meeting',
   'date_night',
