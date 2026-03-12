@@ -9,7 +9,7 @@ via keyword matching, and persists the result as the user's week plan.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List
 
 import httpx
