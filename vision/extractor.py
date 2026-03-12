@@ -30,7 +30,11 @@ except Exception:
 def _product_prompt_for_item(raw: dict[str, Any]) -> str:
     """Build a text-to-image product prompt from extracted item fields."""
     color = (str(raw.get("color") or "").strip()) or "neutral"
-    pattern = (str(raw.get("pattern") or "").strip().lower()) or "solid"
+    raw_pattern = (str(raw.get("pattern") or "").strip().lower())
+    if raw_pattern in ("", "none", "no pattern", "no-pattern", "no_pattern", "-"):
+        pattern = "solid"
+    else:
+        pattern = raw_pattern
     material = (str(raw.get("material") or "").strip()) or ""
     item_type = (str(raw.get("item_type") or "").strip()) or "clothing item"
     fit_style = (str(raw.get("fit_style") or "").strip()) or ""
@@ -95,7 +99,7 @@ def _build_prompt() -> str:
         "    {\n"
         '      "item_type": "specific garment type e.g. t-shirt, jeans, blazer, sneakers",\n'
         '      "color": "primary color",\n'
-        '      "pattern": "solid or pattern name e.g. striped, plaid, floral, graphic, none for solid",\n'
+        '      "pattern": "pattern name e.g. solid, striped, plaid, floral, graphic",\n'
         '      "material": "fabric if visible e.g. cotton, denim, silk, leather, or null if not visible",\n'
         '      "fit_style": "fit or style descriptors e.g. oversized, slim fit, cropped, relaxed, fitted, or null",\n'
         '      "category": "top|bottom|dress|outerwear|shoes|accessory",\n'
@@ -109,7 +113,7 @@ def _build_prompt() -> str:
         "- Return one entry per garment item you can see.\n"
         "- If uncertain, still choose the closest valid category.\n"
         "- item_type must be a concrete garment name (e.g. crewneck sweater, high-waist trousers).\n"
-        "- Use pattern \"solid\" when no pattern is visible.\n"
+        "- When no pattern is visible, set pattern to \"solid\" (do not use values like \"none\" or \"no pattern\").\n"
         "- Output JSON only, no markdown."
     )
 
@@ -168,6 +172,14 @@ def extract_garments_from_image(image_bytes: bytes, mime_type: str = "image/jpeg
             v = raw_item.get(key)
             return str(v).strip() if v else None
 
+        raw_pattern = _str_or_none("pattern")
+        norm_pattern = raw_pattern.strip().lower() if raw_pattern else ""
+        stored_pattern: Optional[str]
+        if norm_pattern in ("", "solid", "none", "no pattern", "no-pattern", "no_pattern", "-"):
+            stored_pattern = None
+        else:
+            stored_pattern = raw_pattern
+
         assets.append(
             ExtractedGarmentAsset(
                 image_bytes=image_out,
@@ -175,7 +187,7 @@ def extract_garments_from_image(image_bytes: bytes, mime_type: str = "image/jpeg
                 category=str(raw_item.get("category") or "top"),
                 sub_category=_str_or_none("sub_category"),
                 color_primary=_str_or_none("color") or _str_or_none("color_primary"),
-                pattern=_str_or_none("pattern") if raw_item.get("pattern") not in (None, "", "solid") else None,
+                pattern=stored_pattern,
                 material=_str_or_none("material"),
                 fit_style=_str_or_none("fit_style"),
                 formality=_str_or_none("formality"),
