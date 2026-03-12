@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import {
+  ActivityIndicator,
   Animated,
   Image,
+  Modal,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -12,7 +14,7 @@ import {
   View,
 } from 'react-native';
 import { useAppState } from './AppStateContext';
-import { getApiErrorMessage } from './api';
+import { getApiErrorMessage, type VisionPreviewItem } from './api';
 import { getImageForGarment, shoesImage } from './stockImages';
 import { palette, radius, type } from './theme';
 
@@ -22,6 +24,16 @@ const SEARCH_STATUS_MESSAGES = [
   'Rifling through digital closets...',
   'Arguing with the algorithm about taste...',
   'Dusting off runway archives...',
+];
+
+const VISION_STATUS_MESSAGES = [
+  'Scanning seams and silhouettes...',
+  'This is the part where you pretend you\'re patient...',
+  'Negotiating with your closet gremlins...',
+  'De-wrinkling pixels...',
+  'Hold please. Teaching pixels good manners...',
+  'Summoning studio lighting...',
+  'Hang tight — your wardrobe is being perceived...',
 ];
 
 export function WardrobeScreen({
@@ -34,7 +46,8 @@ export function WardrobeScreen({
     isLoadingWardrobe,
     wardrobeError,
     addGarmentToWardrobe,
-    addGarmentViaVision,
+    previewVisionItems,
+    commitVisionItems,
     addGarmentViaSearch,
     searchGarmentCandidates,
   } = useAppState();
@@ -51,6 +64,11 @@ export function WardrobeScreen({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [visionSaving, setVisionSaving] = useState(false);
   const [visionError, setVisionError] = useState<string | null>(null);
+  const [visionStatusIndex, setVisionStatusIndex] = useState(0);
+  const [visionPreviewItems, setVisionPreviewItems] = useState<VisionPreviewItem[]>([]);
+  const [visionSelected, setVisionSelected] = useState<Record<number, boolean>>({});
+  const [visionCommitting, setVisionCommitting] = useState(false);
+  const [visionZoomUrl, setVisionZoomUrl] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchCategory, setSearchCategory] = useState<'top' | 'bottom' | 'shoes' | 'accessory'>('top');
@@ -101,6 +119,17 @@ export function WardrobeScreen({
     return () => clearInterval(id);
   }, [searching]);
 
+  useEffect(() => {
+    if (!visionSaving) {
+      setVisionStatusIndex(0);
+      return;
+    }
+    const id = setInterval(() => {
+      setVisionStatusIndex((current) => (current + 1) % VISION_STATUS_MESSAGES.length);
+    }, 3500);
+    return () => clearInterval(id);
+  }, [visionSaving]);
+
   const handleSave = async () => {
     if (!name.trim()) {
       return;
@@ -127,8 +156,9 @@ export function WardrobeScreen({
 
   const handleVisionAdd = async () => {
     try {
-      setVisionSaving(true);
       setVisionError(null);
+      setVisionPreviewItems([]);
+      setVisionSelected({});
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
@@ -137,12 +167,18 @@ export function WardrobeScreen({
       if (result.canceled || !result.assets.length) {
         return;
       }
+      setVisionSaving(true);
       const asset = result.assets[0];
-      await addGarmentViaVision({
+      const items = await previewVisionItems({
         imageUri: asset.uri,
         fileName: asset.fileName || undefined,
         mimeType: asset.mimeType || undefined,
       });
+      setVisionPreviewItems(items);
+      const selected: Record<number, boolean> = {};
+      // All selected by default; user can uncheck or use Select all/none.
+      items.forEach((_, idx) => (selected[idx] = true));
+      setVisionSelected(selected);
     } catch (error) {
       setVisionError(
         getApiErrorMessage(error, 'Vision beta failed while processing your image. Please try another photo.')
@@ -224,6 +260,20 @@ export function WardrobeScreen({
 
   return (
     <SafeAreaView style={styles.safe}>
+      <Modal
+        visible={Boolean(visionZoomUrl)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setVisionZoomUrl(null)}
+      >
+        <Pressable style={styles.zoomBackdrop} onPress={() => setVisionZoomUrl(null)}>
+          {visionZoomUrl ? (
+            <View style={styles.zoomInner}>
+              <Image source={{ uri: visionZoomUrl }} style={styles.zoomImage} resizeMode="contain" />
+            </View>
+          ) : null}
+        </Pressable>
+      </Modal>
       <Animated.View style={[styles.fill, animatedStyle]}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <View style={styles.headlineWrap}>
@@ -267,14 +317,116 @@ export function WardrobeScreen({
               <>
                 <Text style={styles.visionTitle}>Vision beta</Text>
                 <Text style={styles.visionCopy}>
-                  Upload a photo and extract wearable items into clean white-background assets.
+                  Upload a photo to detect clothing items. We’ll generate clean, product-style images + metadata, then you choose what to add. Nothing is added until you confirm.
                 </Text>
                 <Pressable onPress={handleVisionAdd} disabled={visionSaving} style={styles.visionButton}>
-                  <Text style={styles.visionButtonText}>
-                    {visionSaving ? 'Analyzing image...' : 'Upload via Vision beta'}
-                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    {visionSaving ? (
+                      <ActivityIndicator color={palette.ink} />
+                    ) : null}
+                    <Text style={styles.visionButtonText}>
+                      {visionSaving ? VISION_STATUS_MESSAGES[visionStatusIndex] : 'Upload via Vision beta'}
+                    </Text>
+                  </View>
                 </Pressable>
                 {visionError ? <Text style={styles.errorText}>{visionError}</Text> : null}
+
+                {visionPreviewItems.length ? (
+                  <View style={{ marginTop: 14 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={styles.formTitle}>Review extracted items</Text>
+                      <Pressable
+                        onPress={() => {
+                          const allSelected = visionPreviewItems.every((_, idx) => visionSelected[idx] === true);
+                          const next: Record<number, boolean> = {};
+                          visionPreviewItems.forEach((_, idx) => {
+                            next[idx] = !allSelected;
+                          });
+                          setVisionSelected(next);
+                        }}
+                        style={styles.visionSelectAll}
+                      >
+                        <Text style={styles.visionSelectAllText}>
+                          {visionPreviewItems.every((_, idx) => visionSelected[idx] === true)
+                            ? 'Unselect all'
+                            : 'Select all'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                    {visionPreviewItems.map((item, idx) => {
+                      const selected = visionSelected[idx] === true;
+                      const metaParts = [
+                        item.category,
+                        item.color_primary,
+                        item.pattern,
+                        item.material,
+                        item.fit_notes,
+                      ].filter(Boolean);
+                      return (
+                        <View key={`${item.image_url}-${idx}`} style={styles.card}>
+                          <Pressable
+                            onPress={() =>
+                              setVisionSelected((current) => ({
+                                ...current,
+                                [idx]: !selected,
+                              }))
+                            }
+                            hitSlop={10}
+                            style={styles.visionCheckboxWrap}
+                            accessibilityRole="checkbox"
+                            accessibilityState={{ checked: selected }}
+                          >
+                            <View style={[styles.visionCheckbox, selected ? styles.visionCheckboxChecked : null]}>
+                              {selected ? <Text style={styles.visionCheckboxTick}>✓</Text> : null}
+                            </View>
+                          </Pressable>
+                          <Pressable onPress={() => setVisionZoomUrl(item.image_url)}>
+                            <Image
+                              source={{ uri: item.image_url }}
+                              style={styles.cardImage}
+                              resizeMode="contain"
+                            />
+                          </Pressable>
+                          <View style={styles.cardBody}>
+                            <Text style={styles.cardTitle}>
+                              {(item.sub_category || item.category || 'Item').toString()}
+                            </Text>
+                            {metaParts.length ? (
+                              <Text style={styles.cardMeta}>{metaParts.join(' • ')}</Text>
+                            ) : null}
+                          </View>
+                        </View>
+                      );
+                    })}
+
+                    <Pressable
+                      disabled={visionCommitting}
+                      onPress={async () => {
+                        const chosen = visionPreviewItems.filter((_, idx) => visionSelected[idx] === true);
+                        if (!chosen.length) {
+                          setVisionError('Select at least one item to add.');
+                          return;
+                        }
+                        try {
+                          setVisionCommitting(true);
+                          setVisionError(null);
+                          await commitVisionItems(chosen);
+                          setVisionPreviewItems([]);
+                          setVisionSelected({});
+                        } catch (error) {
+                          setVisionError(getApiErrorMessage(error, 'Could not add items. Please try again.'));
+                        } finally {
+                          setVisionCommitting(false);
+                        }
+                      }}
+                      style={[styles.primaryButton, { marginTop: 10 }]}
+                    >
+                      <Text style={styles.primaryButtonText}>
+                        {visionCommitting ? 'Adding...' : 'Add selected to wardrobe'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
               </>
             ) : null}
 
@@ -747,19 +899,27 @@ export function WardrobeScreen({
               )
               .map((garment) => (
                 <View key={garment.id} style={styles.card}>
-                  <Image
-                    source={
-                      garment.primaryImageUrl
-                        ? { uri: garment.primaryImageUrl }
-                        : garment.category === 'bottom'
-                          ? getImageForGarment(garment.name, 'bottom')
-                          : garment.category === 'shoes'
-                            ? shoesImage
-                            : getImageForGarment(garment.name, 'top')
-                    }
-                    style={styles.cardImage}
-                    resizeMode="contain"
-                  />
+                  <Pressable
+                    onPress={() => {
+                      if (garment.primaryImageUrl) {
+                        setVisionZoomUrl(garment.primaryImageUrl);
+                      }
+                    }}
+                  >
+                    <Image
+                      source={
+                        garment.primaryImageUrl
+                          ? { uri: garment.primaryImageUrl }
+                          : garment.category === 'bottom'
+                            ? getImageForGarment(garment.name, 'bottom')
+                            : garment.category === 'shoes'
+                              ? shoesImage
+                              : getImageForGarment(garment.name, 'top')
+                      }
+                      style={styles.cardImage}
+                      resizeMode="contain"
+                    />
+                  </Pressable>
                   <View style={styles.cardBody}>
                     <Text style={styles.cardTitle}>{garment.name}</Text>
                     <Text style={styles.cardMeta}>
@@ -770,10 +930,15 @@ export function WardrobeScreen({
                       const extraTags = rawTags.filter(
                         (tag) => tag !== garment.category && tag !== garment.formality
                       );
-                      if (!extraTags.length) return null;
+                      const details: string[] = [];
+                      if (garment.pattern && garment.pattern !== 'solid') details.push(garment.pattern);
+                      if (garment.material) details.push(garment.material);
+                      if (garment.fitNotes) details.push(garment.fitNotes);
+                      if (extraTags.length) details.push(...extraTags);
+                      if (!details.length) return null;
                       return (
                         <Text style={styles.cardMeta}>
-                          {extraTags.join(' • ')}
+                          {details.join(' • ')}
                         </Text>
                       );
                     })()}
@@ -886,6 +1051,59 @@ const styles = StyleSheet.create({
     backgroundColor: palette.panel,
     padding: 10,
     gap: 10,
+  },
+  visionCheckboxWrap: {
+    alignSelf: 'center',
+    paddingLeft: 4,
+    paddingRight: 2,
+  },
+  visionCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  visionCheckboxChecked: {
+    backgroundColor: palette.panelStrong,
+  },
+  visionCheckboxTick: {
+    color: palette.ink,
+    fontSize: 14,
+    fontFamily: type.bodyDemi,
+    lineHeight: 16,
+  },
+  zoomBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+   zoomInner: {
+     width: '100%',
+     height: '100%',
+     borderRadius: radius.lg,
+     overflow: 'hidden',
+     backgroundColor: 'black',
+   },
+  zoomImage: {
+     width: '100%',
+     height: '100%',
+  },
+  visionSelectAll: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: palette.panelStrong,
+  },
+  visionSelectAllText: {
+    fontSize: 11,
+    fontFamily: type.bodyMedium,
+    color: palette.muted,
   },
   cardImage: {
     width: 64,

@@ -13,13 +13,15 @@ export type GarmentSeasonality = 'hot' | 'mild' | 'cold' | 'all_season';
 export interface Garment {
   id: string;
   userId?: string;
-  // Display name from API field when present, otherwise derived from category/subcategory.
   name: string;
   category: GarmentCategory;
   color: string;
   formality: GarmentFormality;
   seasonality?: GarmentSeasonality;
   primaryImageUrl?: string;
+  pattern?: string | null;
+  material?: string | null;
+  fitNotes?: string | null;
   tags?: string[];
 }
 

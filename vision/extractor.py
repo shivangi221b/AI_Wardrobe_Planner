@@ -11,10 +11,44 @@ from typing import Any, List, Optional
 from google import genai
 from google.genai import types
 from PIL import Image
+from PIL import UnidentifiedImageError
 
 from .image_gen import generate_garment_image
 
 logger = logging.getLogger(__name__)
+
+try:
+    # Adds HEIF/HEIC support to Pillow's Image.open().
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+    _heic_enabled = True
+except Exception:
+    _heic_enabled = False
+
+
+def _product_prompt_for_item(raw: dict[str, Any]) -> str:
+    """Build a text-to-image product prompt from extracted item fields."""
+    color = (str(raw.get("color") or "").strip()) or "neutral"
+    pattern = (str(raw.get("pattern") or "").strip().lower()) or "solid"
+    material = (str(raw.get("material") or "").strip()) or ""
+    item_type = (str(raw.get("item_type") or "").strip()) or "clothing item"
+    fit_style = (str(raw.get("fit_style") or "").strip()) or ""
+
+    parts = [color]
+    if pattern and pattern != "solid":
+        parts.append(pattern)
+    if material:
+        parts.append(material)
+    parts.append(item_type)
+    if fit_style:
+        parts.append(fit_style)
+
+    subject = " ".join(p for p in parts if p)
+    return (
+        f"product photo of a {subject}, "
+        "isolated on a pure white background, studio lighting, flat lay, high resolution, fashion photography"
+    )
 
 
 @dataclass
@@ -24,6 +58,9 @@ class ExtractedGarmentAsset:
     category: str
     sub_category: Optional[str]
     color_primary: Optional[str]
+    pattern: Optional[str]
+    material: Optional[str]
+    fit_style: Optional[str]
     formality: Optional[str]
     seasonality: Optional[str]
 
@@ -56,10 +93,13 @@ def _build_prompt() -> str:
         "{\n"
         '  "items": [\n'
         "    {\n"
-        '      "description": "rich natural-language description of the garment suitable for generating a product photo",\n'
+        '      "item_type": "specific garment type e.g. t-shirt, jeans, blazer, sneakers",\n'
+        '      "color": "primary color",\n'
+        '      "pattern": "solid or pattern name e.g. striped, plaid, floral, graphic, none for solid",\n'
+        '      "material": "fabric if visible e.g. cotton, denim, silk, leather, or null if not visible",\n'
+        '      "fit_style": "fit or style descriptors e.g. oversized, slim fit, cropped, relaxed, fitted, or null",\n'
         '      "category": "top|bottom|dress|outerwear|shoes|accessory",\n'
         '      "sub_category": "short text",\n'
-        '      "color_primary": "short color",\n'
         '      "formality": "casual|smart_casual|business|formal",\n'
         '      "seasonality": "hot|mild|cold|all_season"\n'
         "    }\n"
@@ -68,13 +108,25 @@ def _build_prompt() -> str:
         "Rules:\n"
         "- Return one entry per garment item you can see.\n"
         "- If uncertain, still choose the closest valid category.\n"
-        "- The description must describe the full garment, even if only partially visible (infer likely full shape).\n"
+        "- item_type must be a concrete garment name (e.g. crewneck sweater, high-waist trousers).\n"
+        "- Use pattern \"solid\" when no pattern is visible.\n"
         "- Output JSON only, no markdown."
     )
 
 
 def extract_garments_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> List[ExtractedGarmentAsset]:
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except UnidentifiedImageError as exc:
+        is_heic = str(mime_type or "").lower() in ("image/heic", "image/heif")
+        if is_heic and not _heic_enabled:
+            raise RuntimeError(
+                "HEIC images aren't supported in this backend yet. "
+                "Install pillow-heif and restart the server, or upload JPG/PNG."
+            ) from exc
+        raise RuntimeError(
+            "Unsupported image format. Please upload a JPG/PNG (HEIC supported if pillow-heif is installed)."
+        ) from exc
     width, height = image.size
     logger.info("Extractor start mime=%s size=%dx%d bytes=%d", mime_type, width, height, len(image_bytes))
 
@@ -105,21 +157,29 @@ def extract_garments_from_image(image_bytes: bytes, mime_type: str = "image/jpeg
     for raw_item in items:
         if not isinstance(raw_item, dict):
             continue
-        description = str(raw_item.get("description") or "").strip()
-        if not description:
+        item_type = str(raw_item.get("item_type") or "").strip()
+        if not item_type:
             continue
 
-        # Generate a polished catalog-style asset from the description.
-        image_out = generate_garment_image(description)
+        product_prompt = _product_prompt_for_item(raw_item)
+        image_out = generate_garment_image(product_prompt)
+
+        def _str_or_none(key: str) -> Optional[str]:
+            v = raw_item.get(key)
+            return str(v).strip() if v else None
+
         assets.append(
             ExtractedGarmentAsset(
                 image_bytes=image_out,
-                description=description,
+                description=product_prompt,
                 category=str(raw_item.get("category") or "top"),
-                sub_category=(str(raw_item.get("sub_category")) if raw_item.get("sub_category") else None),
-                color_primary=(str(raw_item.get("color_primary")) if raw_item.get("color_primary") else None),
-                formality=(str(raw_item.get("formality")) if raw_item.get("formality") else None),
-                seasonality=(str(raw_item.get("seasonality")) if raw_item.get("seasonality") else None),
+                sub_category=_str_or_none("sub_category"),
+                color_primary=_str_or_none("color") or _str_or_none("color_primary"),
+                pattern=_str_or_none("pattern") if raw_item.get("pattern") not in (None, "", "solid") else None,
+                material=_str_or_none("material"),
+                fit_style=_str_or_none("fit_style"),
+                formality=_str_or_none("formality"),
+                seasonality=_str_or_none("seasonality"),
             )
         )
 

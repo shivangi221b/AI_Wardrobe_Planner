@@ -52,6 +52,9 @@ interface WardrobeApiItem {
   color?: string | null;
   color_primary?: string | null;
   color_secondary?: string | null;
+  pattern?: string | null;
+  material?: string | null;
+  fit_notes?: string | null;
   formality?: string | null;
   seasonality?: string | null;
   primary_image_url?: string;
@@ -96,6 +99,18 @@ export interface VisionAddPayload {
   imageUri: string;
   fileName?: string;
   mimeType?: string;
+}
+
+export interface VisionPreviewItem {
+  image_url: string;
+  category?: string;
+  sub_category?: string | null;
+  color_primary?: string | null;
+  pattern?: string | null;
+  material?: string | null;
+  fit_notes?: string | null;
+  formality?: string | null;
+  seasonality?: string | null;
 }
 
 export interface GarmentSearchResult {
@@ -223,6 +238,9 @@ function mapGarment(item: WardrobeApiItem): Garment {
     formality: normalizeFormality(item.formality),
     seasonality: normalizeSeasonality(item.seasonality),
     primaryImageUrl: item.primary_image_url,
+    pattern: item.pattern?.trim() || undefined,
+    material: item.material?.trim() || undefined,
+    fitNotes: item.fit_notes?.trim() || undefined,
     tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
   };
 }
@@ -573,6 +591,56 @@ export async function addGarmentFromVision(
     return [];
   }
   return response.map(mapGarment);
+}
+
+export async function previewGarmentsFromVision(
+  userId: string,
+  payload: VisionAddPayload
+): Promise<VisionPreviewItem[]> {
+  if (USE_MOCK_API) {
+    // Keep mock path simple for now.
+    return [];
+  }
+
+  const fileResponse = await fetch(payload.imageUri);
+  const blob = await fileResponse.blob();
+
+  const formData = new FormData();
+  formData.append('user_id', userId);
+  formData.append(
+    'file',
+    blob,
+    payload.fileName || `wardrobe-upload-${Date.now()}.jpg`
+  );
+
+  const response = await requestJson<VisionPreviewItem[]>(
+    '/vision/extract-preview',
+    {
+      method: 'POST',
+      body: formData,
+    }
+  );
+  return Array.isArray(response) ? response : [];
+}
+
+export async function commitVisionItems(
+  userId: string,
+  items: VisionPreviewItem[]
+): Promise<Garment[]> {
+  if (USE_MOCK_API) {
+    return [];
+  }
+
+  const response = await requestJson<WardrobeApiItem[]>(
+    `/vision/commit?user_id=${encodeURIComponent(userId)}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        items,
+      }),
+    }
+  );
+  return Array.isArray(response) ? response.map(mapGarment) : [];
 }
 
 export async function searchGarmentImages(
