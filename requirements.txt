@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 pydantic
 httpx
+huggingface-hub
 
 numpy
 opencv-python-headless
@@ -14,6 +15,7 @@ google-genai
 rembg
 onnxruntime
 Pillow
+pillow-heif
 python-multipart
 supabase
 

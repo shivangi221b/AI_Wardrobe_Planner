@@ -95,7 +95,17 @@ def _save_garment_image_locally(user_id: str, garment_id: str, image_bytes: byte
 
 
 def upload_garment_image(user_id: str, garment_id: str, image_bytes: bytes) -> str:
-    if _storage_mode() == "local":
+    mode = _storage_mode()
+    if mode == "local":
+        return _save_garment_image_locally(user_id, garment_id, image_bytes)
+
+    # Be resilient in dev: if Supabase creds aren't present, fall back to local
+    # storage instead of crashing the whole vision pipeline.
+    if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_SERVICE_KEY"):
+        logger.warning(
+            "Supabase storage requested (mode=%s) but SUPABASE_URL/SUPABASE_SERVICE_KEY missing; falling back to local.",
+            mode,
+        )
         return _save_garment_image_locally(user_id, garment_id, image_bytes)
 
     bucket = os.getenv("SUPABASE_GARMENTS_BUCKET", "garments")

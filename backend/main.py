@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, HttpUrl
 from starlette.concurrency import run_in_threadpool
 
-from vision.extractor import extract_garments_from_image
+from vision.extractor import ExtractedGarmentAsset, extract_garments_from_image
 
 from .db import insert_garment
 from .models import (
@@ -100,6 +100,39 @@ class SearchGarmentResult(BaseModel):
     image_url: str
     title: Optional[str] = None
     source_url: Optional[str] = None
+
+
+class VisionPreviewItem(BaseModel):
+    image_url: HttpUrl
+    category: GarmentCategory
+    sub_category: Optional[str] = None
+    color_primary: Optional[str] = None
+    pattern: Optional[str] = None
+    material: Optional[str] = None
+    fit_notes: Optional[str] = None
+    formality: Optional[GarmentFormality] = None
+    seasonality: Optional[GarmentSeasonality] = None
+
+
+class VisionCommitRequest(BaseModel):
+    items: List[VisionPreviewItem]
+
+
+def _is_trusted_image_url(url: str) -> bool:
+    url = (url or "").strip()
+    if not url:
+        return False
+    allowed_prefixes: list[str] = []
+    local_base = os.getenv("LOCAL_ASSET_BASE_URL")
+    if local_base:
+        allowed_prefixes.append(local_base.rstrip("/"))
+    supabase_url = os.getenv("SUPABASE_URL")
+    if supabase_url:
+        allowed_prefixes.append(supabase_url.rstrip("/"))
+    if not allowed_prefixes:
+        # In local/dev with no configured bases, accept anything to avoid false positives.
+        return True
+    return any(url.startswith(prefix) for prefix in allowed_prefixes)
 
 
 def _safe_category(value: str) -> GarmentCategory:
@@ -303,6 +336,105 @@ async def search_garment_images(user_id: str, request: SearchGarmentRequest) -> 
 # ---------------------------------------------------------------------------
 
 
+def _build_vision_previews_sync(user_id: str, extracted: List[ExtractedGarmentAsset]) -> List[VisionPreviewItem]:
+    from .storage import upload_garment_image
+
+    previews: List[VisionPreviewItem] = []
+    for item in extracted:
+        asset_id = str(uuid4())
+        public_url = upload_garment_image(user_id, asset_id, item.image_bytes)
+        previews.append(
+            VisionPreviewItem(
+                image_url=public_url,
+                category=_safe_category(item.category),
+                sub_category=item.sub_category,
+                color_primary=item.color_primary,
+                pattern=item.pattern,
+                material=item.material,
+                fit_notes=item.fit_style,
+                formality=_safe_formality(item.formality),
+                seasonality=_safe_seasonality(item.seasonality),
+            )
+        )
+    return previews
+
+
+@app.post("/vision/extract-preview", response_model=List[VisionPreviewItem])
+async def extract_preview_from_image(
+    user_id: str = Form(...),
+    file: UploadFile = File(...),
+) -> List[VisionPreviewItem]:
+    """
+    Vision onboarding (preview): generate product-style images + metadata but do NOT
+    insert garments into the wardrobe yet. The client can choose which to commit.
+    """
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    mime_type = file.content_type or "image/jpeg"
+    logger.info(
+        "Vision preview request user_id=%s filename=%s mime=%s bytes=%d",
+        user_id, file.filename, mime_type, len(image_bytes),
+    )
+
+    try:
+        extracted = await run_in_threadpool(extract_garments_from_image, image_bytes, mime_type)
+    except RuntimeError as exc:
+        logger.exception("Vision preview failed user_id=%s filename=%s", user_id, file.filename)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if not extracted:
+        raise HTTPException(
+            status_code=422,
+            detail="No garments detected from image. Please upload a clearer outfit photo.",
+        )
+
+    previews = await run_in_threadpool(_build_vision_previews_sync, user_id, extracted)
+    return previews
+
+
+def _commit_preview_items_sync(user_id: str, items: List[VisionPreviewItem]) -> List[GarmentItem]:
+    now = datetime.utcnow()
+    garments: List[GarmentItem] = []
+    for item in items or []:
+        formality = item.formality or GarmentFormality.CASUAL
+        seasonality = item.seasonality or GarmentSeasonality.ALL_SEASON
+        tags = build_garment_tags(item.category, formality, seasonality)
+        garment_id = str(uuid4())
+        garment = GarmentItem(
+            id=garment_id,
+            user_id=user_id,
+            primary_image_url=item.image_url,
+            category=item.category,
+            sub_category=item.sub_category,
+            color_primary=item.color_primary,
+            pattern=item.pattern,
+            material=item.material,
+            fit_notes=item.fit_notes,
+            formality=formality,
+            seasonality=seasonality,
+            tags=tags,
+            created_at=now,
+            updated_at=now,
+        )
+        garments.append(insert_garment(garment))
+    return garments
+
+
+@app.post("/vision/commit", response_model=List[GarmentItem])
+async def commit_preview_items(user_id: str, request: VisionCommitRequest) -> List[GarmentItem]:
+    """
+    Persist selected preview items into the user's wardrobe.
+    """
+    bad_urls = [str(item.image_url) for item in (request.items or []) if not _is_trusted_image_url(str(item.image_url))]
+    if bad_urls:
+        raise HTTPException(status_code=400, detail="One or more image_url values are not from trusted storage.")
+
+    garments = await run_in_threadpool(_commit_preview_items_sync, user_id, request.items or [])
+    return garments
+
+
 @app.post("/vision/extract", response_model=List[GarmentItem])
 async def extract_wardrobe_from_image(
     user_id: str = Form(...),
@@ -344,6 +476,9 @@ async def extract_wardrobe_from_image(
             category=_safe_category(item.category),
             sub_category=item.sub_category,
             color_primary=item.color_primary,
+            pattern=item.pattern,
+            material=item.material,
+            fit_notes=item.fit_style,
             formality=_safe_formality(item.formality),
             seasonality=_safe_seasonality(item.seasonality),
             created_at=now,

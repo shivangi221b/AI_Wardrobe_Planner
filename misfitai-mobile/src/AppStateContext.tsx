@@ -19,21 +19,25 @@ import { dayOrder } from './constants';
 import {
   addGarment,
   addGarmentFromVision,
+  commitVisionItems as apiCommitVisionItems,
   confirmSearchAdd,
   getApiErrorMessage,
   getWardrobe,
   getWeekEvents,
   getWeeklyRecommendations,
+  previewGarmentsFromVision as apiPreviewGarmentsFromVision,
   searchGarmentImages,
   syncCalendarEvents as apiSyncCalendarEvents,
   type ConfirmSearchAddPayload,
   type GarmentSearchResult,
   type GarmentSearchOptions,
   type VisionAddPayload,
+  type VisionPreviewItem,
   saveWeekEvents,
 } from './api';
 
 interface AppState {
+  userId: string;
   garments: Garment[];
   eventsByDay: Record<DayOfWeek, EventType>;
   recommendations: DayRecommendation[];
@@ -60,6 +64,8 @@ interface AppState {
     }
   ) => Promise<void>;
   addGarmentViaVision: (payload: VisionAddPayload) => Promise<void>;
+  previewVisionItems: (payload: VisionAddPayload) => Promise<VisionPreviewItem[]>;
+  commitVisionItems: (items: VisionPreviewItem[]) => Promise<void>;
   addGarmentViaSearch: (payload: ConfirmSearchAddPayload) => Promise<void>;
 }
 
@@ -253,6 +259,21 @@ export function AppStateProvider({
     });
   }, [userId]);
 
+  const previewVisionItems = useCallback(async (payload: VisionAddPayload): Promise<VisionPreviewItem[]> => {
+    return apiPreviewGarmentsFromVision(userId, payload);
+  }, [userId]);
+
+  const commitVisionItems = useCallback(async (items: VisionPreviewItem[]): Promise<void> => {
+    const createdItems = await apiCommitVisionItems(userId, items);
+    setGarments((current) => {
+      const byId = new Map(current.map((item) => [item.id, item]));
+      createdItems.forEach((item) => {
+        byId.set(item.id, item);
+      });
+      return Array.from(byId.values());
+    });
+  }, [userId]);
+
   const searchGarmentCandidates = useCallback(
     async (
       query: string,
@@ -280,6 +301,7 @@ export function AppStateProvider({
 
   const value: AppState = useMemo(
     () => ({
+      userId,
       garments,
       eventsByDay,
       recommendations,
@@ -294,9 +316,12 @@ export function AppStateProvider({
       generateRecommendations,
       addGarmentToWardrobe,
       addGarmentViaVision,
+      previewVisionItems,
+      commitVisionItems,
       addGarmentViaSearch,
     }),
     [
+      userId,
       garments,
       eventsByDay,
       recommendations,
@@ -311,6 +336,8 @@ export function AppStateProvider({
       generateRecommendations,
       addGarmentToWardrobe,
       addGarmentViaVision,
+      previewVisionItems,
+      commitVisionItems,
       addGarmentViaSearch,
     ]
   );
