@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
 
+from dotenv import load_dotenv
+
+# Load repo-root .env so uvicorn works without `export $(grep .env | xargs)` (breaks if KEY = value has spaces).
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,7 +33,8 @@ from .models import (
     MediaType,
     WeekEvent,
 )
-from .routers import recommendations, weather_router, calendar_router
+from .routers import analytics_router, recommendations, weather_router, calendar_router
+from .routers.analytics_router import public_metrics_router
 from .storage import get_wardrobe, get_week_events as _storage_get_week_events, store_week_events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -57,6 +63,8 @@ app.add_middleware(
 app.include_router(recommendations.router)
 app.include_router(weather_router.router)
 app.include_router(calendar_router.router)
+app.include_router(analytics_router.router)
+app.include_router(public_metrics_router)
 
 _local_assets_dir = Path(os.getenv("LOCAL_GARMENTS_DIR", "outputs/local_garments"))
 _local_assets_dir.mkdir(parents=True, exist_ok=True)

@@ -10,6 +10,7 @@ import { USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
 import { palette, radius, type } from './src/theme';
+import { initAnalytics, trackAuthSuccess } from './src/analytics';
 
 const SESSION_STORAGE_KEY = '@misfitai/session';
 
@@ -120,6 +121,10 @@ export default function App() {
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
+    initAnalytics();
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     AsyncStorage.getItem(SESSION_STORAGE_KEY)
       .then((raw) => {
@@ -146,6 +151,7 @@ export default function App() {
       const userId = deriveUserIdFromProfile(profile);
       const next: Session = { provider, mode, profile, userId };
       setSession(next);
+      trackAuthSuccess(provider);
       AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
       if (provider === 'google' && accessToken) {
         setGoogleAccessToken(accessToken);
