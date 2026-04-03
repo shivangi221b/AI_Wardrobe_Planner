@@ -54,6 +54,7 @@ gcloud services enable \
   iam.googleapis.com \
   iamcredentials.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  aiplatform.googleapis.com \
   firebase.googleapis.com
 
 # ── 2. Create Artifact Registry Docker repository ─────────────────────────────
@@ -93,6 +94,16 @@ for ROLE in \
     --quiet
 done
 echo "    IAM roles granted."
+
+# Grant the Cloud Run runtime identity (default compute SA) permission to call
+# Vertex AI — required for the vision extractor and LLM client running in Cloud Run.
+PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT_ID" --format="value(projectNumber)")
+COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="serviceAccount:${COMPUTE_SA}" \
+  --role="roles/aiplatform.user" \
+  --quiet
+echo "    Granted roles/aiplatform.user to Cloud Run runtime SA: ${COMPUTE_SA}"
 
 # ── 4. Workload Identity Federation ───────────────────────────────────────────
 echo ""
@@ -150,7 +161,6 @@ SECRETS=(
   "SUPABASE_URL"
   "SUPABASE_SERVICE_KEY"
   "SERPAPI_KEY"
-  "GEMINI_API_KEY"
   "VERTEX_AI_API_KEY"
   "HF_API_TOKEN"
   "ALLOWED_ORIGINS"

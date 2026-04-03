@@ -102,7 +102,6 @@ jobs:
               SUPABASE_URL=SUPABASE_URL:latest,\
               SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest,\
               SERPAPI_KEY=SERPAPI_KEY:latest,\
-              GEMINI_API_KEY=GEMINI_API_KEY:latest,\
               VERTEX_AI_API_KEY=VERTEX_AI_API_KEY:latest,\
               HF_API_TOKEN=HF_API_TOKEN:latest,\
               ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest" \
@@ -111,7 +110,9 @@ jobs:
               SUPABASE_GARMENTS_BUCKET=garments,\
               SUPABASE_GARMENTS_TABLE=garments,\
               VERTEX_AI_MODEL=gemini-2.0-flash,\
-              GEMINI_MODEL=gemini-2.5-flash" \
+              GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }},\
+              GOOGLE_CLOUD_LOCATION=${{ env.GCP_REGION }},\
+              VERTEX_AI_VISION_MODEL=gemini-2.5-flash" \
             --quiet
 
       # ── 8. Print the deployed service URL ────────────────────────────────────
