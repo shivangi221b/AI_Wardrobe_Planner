@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
+python-dotenv
 pydantic
 httpx
 huggingface-hub
@@ -18,4 +19,5 @@ Pillow
 pillow-heif
 python-multipart
 supabase
+google-analytics-data
 
