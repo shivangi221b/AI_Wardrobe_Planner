@@ -1,0 +1,124 @@
+name: Deploy Backend to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # Rebuild and redeploy whenever anything that affects the container changes.
+      - "backend/**"
+      - "vision/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/deploy-backend.yml"
+
+  # Allow manual re-deploys from the GitHub Actions UI.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for Workload Identity Federation — allows the workflow to request
+  # a short-lived OIDC token that GCP can verify without a stored JSON key.
+  id-token: write
+
+env:
+  GCP_REGION: ${{ secrets.GCP_REGION }}
+  AR_IMAGE: ${{ secrets.AR_IMAGE }}
+  CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+
+jobs:
+  build-and-deploy:
+    name: Build, Push & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout code ─────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Authenticate to Google Cloud via Workload Identity Federation ─────
+      # No long-lived JSON key is stored anywhere; GCP issues a short-lived
+      # access token exchanged for the GitHub OIDC token at runtime.
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # ── 3. Set up gcloud CLI ──────────────────────────────────────────────────
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── 4. Configure Docker to push to Artifact Registry ─────────────────────
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ env.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      # ── 5. Build Docker image ─────────────────────────────────────────────────
+      # Tag with the short commit SHA for traceability plus 'latest' for
+      # Cloud Run to always pull the newest build.
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG="${{ env.AR_IMAGE }}:${{ github.sha }}"
+          IMAGE_LATEST="${{ env.AR_IMAGE }}:latest"
+
+          docker build \
+            --tag "$IMAGE_TAG" \
+            --tag "$IMAGE_LATEST" \
+            --cache-from "$IMAGE_LATEST" \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            .
+
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=$IMAGE_LATEST" >> "$GITHUB_ENV"
+        env:
+          DOCKER_BUILDKIT: "1"
+
+      # ── 6. Push image to Artifact Registry ───────────────────────────────────
+      - name: Push image to Artifact Registry
+        run: |
+          docker push "${{ env.IMAGE_TAG }}"
+          docker push "${{ env.IMAGE_LATEST }}"
+
+      # ── 7. Deploy to Cloud Run ────────────────────────────────────────────────
+      # Secrets are mounted as environment variables sourced directly from
+      # Secret Manager — they never appear in GitHub logs or workflow files.
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${{ env.CLOUD_RUN_SERVICE }}" \
+            --image "${{ env.IMAGE_TAG }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --memory 4Gi \
+            --cpu 2 \
+            --min-instances 0 \
+            --max-instances 10 \
+            --concurrency 80 \
+            --timeout 300 \
+            --set-secrets "\
+              SUPABASE_URL=SUPABASE_URL:latest,\
+              SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest,\
+              SERPAPI_KEY=SERPAPI_KEY:latest,\
+              GEMINI_API_KEY=GEMINI_API_KEY:latest,\
+              VERTEX_AI_API_KEY=VERTEX_AI_API_KEY:latest,\
+              HF_API_TOKEN=HF_API_TOKEN:latest,\
+              ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest" \
+            --set-env-vars "\
+              IMAGE_STORAGE_BACKEND=supabase,\
+              SUPABASE_GARMENTS_BUCKET=garments,\
+              SUPABASE_GARMENTS_TABLE=garments,\
+              VERTEX_AI_MODEL=gemini-2.0-flash,\
+              GEMINI_MODEL=gemini-2.5-flash" \
+            --quiet
+
+      # ── 8. Print the deployed service URL ────────────────────────────────────
+      - name: Get Cloud Run service URL
+        run: |
+          SERVICE_URL=$(gcloud run services describe "${{ env.CLOUD_RUN_SERVICE }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --format="value(status.url)")
+          echo "Backend deployed to: $SERVICE_URL"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_STEP_SUMMARY"

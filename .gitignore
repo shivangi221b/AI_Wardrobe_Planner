@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .env
+.env.local
 
 outputs/
 vision/models/
@@ -10,3 +11,7 @@ yolov8n.pt
 supabase/.temp
 
 .DS_Store
+
+# Firebase
+.firebase/
+firebase-debug.log
