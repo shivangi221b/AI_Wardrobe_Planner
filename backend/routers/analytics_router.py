@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..analytics_metrics import build_analytics_summary
@@ -76,7 +76,14 @@ def require_analytics_access(
     response_model=AnalyticsSummaryResponse,
     dependencies=[Depends(require_analytics_access)],
 )
-def get_metrics(period_days: int = 28) -> AnalyticsSummaryResponse:
+def get_metrics(
+    period_days: int = Query(
+        28,
+        ge=1,
+        le=366,
+        description="Rolling window (days) for GA4 page_views and active_users.",
+    ),
+) -> AnalyticsSummaryResponse:
     """
     Internal metrics snapshot for dashboards: signups, waitlist size, and (when
     GA4 is configured) rolling page views and active users.
@@ -93,7 +100,14 @@ def get_metrics(period_days: int = 28) -> AnalyticsSummaryResponse:
     response_model=PublicMetricsResponse,
     dependencies=[Depends(require_analytics_access)],
 )
-def get_public_metrics(period_days: int = 28) -> PublicMetricsResponse:
+def get_public_metrics(
+    period_days: int = Query(
+        28,
+        ge=1,
+        le=366,
+        description="Rolling window (days) for GA4 page_views and active_users.",
+    ),
+) -> PublicMetricsResponse:
     """
     Same data as ``GET /analytics/metrics`` but only the four counters (slide format).
     """

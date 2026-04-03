@@ -205,6 +205,8 @@ def fetch_ga4_screen_metrics(days: int) -> Tuple[Optional[int], Optional[int]]:
 
 
 def build_analytics_summary(*, period_days: int = 28) -> dict:
+    # Keep in sync with AnalyticsSummaryResponse.period_days and Query(ge=1, le=366).
+    period_days = max(1, min(int(period_days), 366))
     now = datetime.now(timezone.utc)
     if _env_truthy("ANALYTICS_USE_DUMMY_METRICS"):
         return {
