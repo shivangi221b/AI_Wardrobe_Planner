@@ -1,1 +1,1 @@
-https://dishes-shareholders-toolbox-protecting.trycloudflare.com/api/metrics
+https://stats-representations-entrepreneur-smtp.trycloudflare.com/api/metrics
