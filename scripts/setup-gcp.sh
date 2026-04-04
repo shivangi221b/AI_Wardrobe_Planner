@@ -19,16 +19,16 @@
 set -euo pipefail
 
 # ─── Configuration — edit these before running ───────────────────────────────
-GCP_PROJECT_ID="misfitai"            # Your Google Cloud project ID
+GCP_PROJECT_ID="misfitai-2026"            # Your Google Cloud project ID
 GCP_REGION="us-central1"             # Cloud Run & Artifact Registry region
 AR_REPO="misfitai"                   # Artifact Registry repository name
 CLOUD_RUN_SERVICE="misfitai-backend" # Cloud Run service name
 SA_NAME="github-actions-deploy"      # Service account for GitHub Actions
-GITHUB_ORG="your-github-username"    # GitHub org or username
+GITHUB_ORG="shivangi221b"    # GitHub org or username
 GITHUB_REPO="AI_Wardrobe_Planner"    # GitHub repository name
 WIF_POOL="github-pool"               # Workload Identity Pool name
 WIF_PROVIDER="github-provider"       # Workload Identity Provider name
-FIREBASE_PROJECT_ID="$GCP_PROJECT_ID" # Firebase project ID (same as GCP)
+FIREBASE_PROJECT_ID="misfitai-2026" # Firebase project ID/GCP Project ID
 # ─────────────────────────────────────────────────────────────────────────────
 
 SA_EMAIL="${SA_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
@@ -132,6 +132,7 @@ if ! gcloud iam workload-identity-pools providers describe "$WIF_PROVIDER" \
     --location=global \
     --issuer-uri="https://token.actions.githubusercontent.com" \
     --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
+    --attribute-condition="attribute.repository==\"${GITHUB_ORG}/${GITHUB_REPO}\"" \
     --display-name="GitHub OIDC Provider"
   echo "    Provider created: ${WIF_PROVIDER}"
 else
