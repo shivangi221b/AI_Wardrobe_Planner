@@ -18,10 +18,13 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install CPU-only PyTorch first to keep the image under ~2 GB.
-# The full CUDA wheel is not needed because Cloud Run runs on CPU.
+# Versions are pinned for reproducible builds — bump deliberately and test
+# locally before committing, since torch ABI changes can break ultralytics
+# and open-clip-torch. torch is intentionally absent from requirements.txt
+# so this install is the single authoritative source of the PyTorch wheel.
 RUN pip install --no-cache-dir \
-    torch \
-    torchvision \
+    "torch==2.5.1" \
+    "torchvision==0.20.1" \
     --index-url https://download.pytorch.org/whl/cpu
 
 # Install the remaining packages (ultralytics, open-clip-torch, rembg, etc.)
