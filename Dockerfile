@@ -41,4 +41,8 @@ COPY vision/ vision/
 # Cloud Run injects PORT automatically (defaults to 8080).
 ENV PORT=8080
 
-CMD uvicorn backend.main:app --host 0.0.0.0 --port "${PORT}"
+# Use exec-form so the shell is NOT PID 1. The inner `exec` replaces sh with
+# uvicorn, ensuring SIGTERM from Cloud Run is delivered directly to uvicorn
+# for graceful shutdown. Shell-form CMD (a plain string) leaves sh as PID 1
+# which may swallow SIGTERM and cause Cloud Run to force-kill the container.
+CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}"]

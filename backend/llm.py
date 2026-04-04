@@ -1,28 +1,31 @@
 """
 llm.py — LLM client for outfit explanation generation.
 
-Uses Google Vertex AI (Gemini) to produce a single natural-language sentence
-explaining why the selected top and bottom suit the occasion.
-Garment images are forwarded to the model when available, encoded as inline
-base64 data so the REST endpoint can process them without GCS.
+Uses Google Vertex AI (Gemini) via ADC (Application Default Credentials),
+the same auth mechanism as vision/extractor.py.  No API key is needed; the
+runtime service account used by Cloud Run (or the local gcloud ADC identity
+set up with `gcloud auth application-default login`) grants access automatically.
 
 Environment variables
 ---------------------
-VERTEX_AI_API_KEY   Required at call time. Missing key returns the fallback
-                    template so the server can still start without it.
-VERTEX_AI_MODEL     Optional. Defaults to "gemini-3.1-pro-preview".
+GOOGLE_CLOUD_PROJECT    Required. GCP project that hosts the Vertex AI API.
+GOOGLE_CLOUD_LOCATION   Optional. Defaults to "us-central1".
+VERTEX_AI_MODEL         Optional. Defaults to "gemini-3.1-pro-preview".
 """
 
 from __future__ import annotations
 
-import base64
+import asyncio
 import ipaddress
 import logging
 import os
+from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
+from google import genai
+from google.genai import types
 
 from .models import GarmentItem
 
@@ -34,19 +37,24 @@ logger = logging.getLogger(__name__)
 
 _model = os.getenv("VERTEX_AI_MODEL", "gemini-3.1-pro-preview")
 
-# API key and endpoint URL are resolved lazily at call time so that missing
-# VERTEX_AI_API_KEY does not prevent the server from starting.
-def _get_endpoint_url() -> Optional[str]:
-    api_key = os.getenv("VERTEX_AI_API_KEY", "").strip()
-    if not api_key:
+
+@lru_cache(maxsize=1)
+def _gemini_client() -> Optional[genai.Client]:
+    """Return a Vertex AI genai.Client, or None if GOOGLE_CLOUD_PROJECT is unset.
+
+    Cached so the client (and its underlying connection pool) is shared across
+    all requests for the lifetime of the process.
+    """
+    project = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+    if not project:
         return None
-    return (
-        f"https://aiplatform.googleapis.com/v1/publishers/google/models/"
-        f"{_model}:generateContent?key={api_key}"
-    )
+    location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    return genai.Client(vertexai=True, project=project, location=location)
+
 
 # ---------------------------------------------------------------------------
 # Shared HTTP client — reused across all requests for connection pooling.
+# Used only for downloading garment images from Supabase storage URLs.
 # ---------------------------------------------------------------------------
 
 _http_client = httpx.AsyncClient(
@@ -97,12 +105,11 @@ def _is_safe_image_url(url: str) -> bool:
             return False
         if hostname in _BLOCKED_HOSTNAMES:
             return False
-        # If the hostname is an IP literal, reject private/reserved ranges.
         try:
             addr = ipaddress.ip_address(hostname)
             return not any(addr in net for net in _PRIVATE_NETWORKS)
         except ValueError:
-            pass  # It's a regular hostname — allowed.
+            pass  # Regular hostname — allowed.
     except Exception:
         return False
     return True
@@ -151,8 +158,8 @@ def _describe_item(label: str, item: Optional[GarmentItem]) -> str:
     return f"{label}: {' — '.join(parts)}"
 
 
-async def _fetch_image_as_inline_data(url: str) -> Optional[dict]:
-    """Download an image from *url* and return a Gemini inlineData part.
+async def _fetch_image_part(url: str) -> Optional[types.Part]:
+    """Download an image from *url* and return a genai Part for inline delivery.
 
     Returns None (and logs a warning) if the URL fails SSRF validation,
     the request fails, or the response exceeds _MAX_IMAGE_BYTES.
@@ -169,21 +176,20 @@ async def _fetch_image_as_inline_data(url: str) -> Optional[dict]:
             )
             return None
         mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
-        encoded = base64.b64encode(resp.content).decode("utf-8")
-        return {"inlineData": {"mimeType": mime, "data": encoded}}
+        return types.Part.from_bytes(data=resp.content, mime_type=mime)
     except Exception as exc:
         logger.debug("Could not fetch garment image %s: %s", url, exc)
         return None
 
 
-async def _image_part(item: Optional[GarmentItem]) -> Optional[dict]:
-    """Return a Gemini inlineData part for the item's image, or None."""
+async def _image_part(item: Optional[GarmentItem]) -> Optional[types.Part]:
+    """Return a genai Part for the item's image, or None."""
     if item is None:
         return None
     url = str(item.primary_image_url) if item.primary_image_url else None
     if not url:
         return None
-    return await _fetch_image_as_inline_data(url)
+    return await _fetch_image_part(url)
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +206,10 @@ async def generate_outfit_explanation(
     """
     Call the Vertex AI Gemini model to generate a one-sentence outfit explanation.
 
+    Authentication uses ADC — no API key required. In Cloud Run the runtime
+    service account is used automatically. Locally, run:
+        gcloud auth application-default login
+
     Args:
         day:        Day of the week, e.g. ``"Monday"``.
         event_type: Event label, e.g. ``"work_meeting"``.
@@ -208,52 +218,47 @@ async def generate_outfit_explanation(
 
     Returns:
         A single natural-language sentence. Falls back to a safe template
-        string if VERTEX_AI_API_KEY is missing or the API call fails so the
-        endpoint never crashes.
+        string if GOOGLE_CLOUD_PROJECT is unset or the API call fails, so
+        the recommendations endpoint never crashes.
     """
     event_label = event_type.replace("_", " ")
 
-    endpoint_url = _get_endpoint_url()
-    if not endpoint_url:
+    client = _gemini_client()
+    if client is None:
         logger.warning(
-            "VERTEX_AI_API_KEY is not set; returning fallback for %s %s",
+            "GOOGLE_CLOUD_PROJECT is not set; returning fallback for %s %s",
             day,
             event_type,
         )
         return _FALLBACK_TEMPLATE.format(day=day, event_type=event_label)
 
-    text_content = (
-        f"Day: {day} | Event: {event_label}\n"
-        f"{_describe_item('Top', top)}\n"
-        f"{_describe_item('Bottom', bottom)}"
+    text_part = types.Part.from_text(
+        text=(
+            f"Day: {day} | Event: {event_label}\n"
+            f"{_describe_item('Top', top)}\n"
+            f"{_describe_item('Bottom', bottom)}"
+        )
     )
 
-    # Build user parts: text first, then optional inline images
-    user_parts: list[dict] = [{"text": text_content}]
-
+    user_parts: list[types.Part] = [text_part]
     for part in [await _image_part(top), await _image_part(bottom)]:
         if part is not None:
             user_parts.append(part)
 
-    payload = {
-        "systemInstruction": {
-            "parts": [{"text": _SYSTEM_PROMPT}]
-        },
-        "contents": [
-            {"role": "user", "parts": user_parts}
-        ],
-        "generationConfig": {
-            "maxOutputTokens": 120,
-            "temperature": 0.7,
-        },
-    }
-
     try:
-        response = await _http_client.post(endpoint_url, json=payload, timeout=30.0)
-        response.raise_for_status()
-        data = response.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return text.strip()
+        # Run the synchronous SDK call in a thread so the event loop is not blocked.
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=_model,
+            contents=user_parts,
+            config=types.GenerateContentConfig(
+                system_instruction=_SYSTEM_PROMPT,
+                max_output_tokens=120,
+                temperature=0.7,
+            ),
+        )
+        text = (response.text or "").strip()
+        return text or _FALLBACK_TEMPLATE.format(day=day, event_type=event_label)
     except Exception as exc:
         logger.warning(
             "LLM explanation generation failed for %s %s: %s",

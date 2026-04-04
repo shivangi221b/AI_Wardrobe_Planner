@@ -107,7 +107,6 @@ jobs:
               SUPABASE_URL=SUPABASE_URL:latest,\
               SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest,\
               SERPAPI_KEY=SERPAPI_KEY:latest,\
-              VERTEX_AI_API_KEY=VERTEX_AI_API_KEY:latest,\
               HF_API_TOKEN=HF_API_TOKEN:latest,\
               ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest" \
             --set-env-vars "\

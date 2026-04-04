@@ -86,9 +86,10 @@ jobs:
           docker push "${{ env.IMAGE_DEV_LATEST }}"
 
       # ── 7. Deploy to misfitai-backend-dev Cloud Run ───────────────────────────
-      # ALLOWED_ORIGINS=* lets any Firebase Hosting preview channel origin make
-      # cross-origin requests to this dev service without needing to whitelist
-      # each dynamically-generated preview URL. Never use * on production.
+      # CORS_ORIGIN_REGEX=https://.*\.web\.app allows any Firebase Hosting domain
+      # (including dynamically-generated preview channel subdomains) without
+      # opening CORS to all origins. Never use ALLOWED_ORIGINS=* on any service
+      # that mounts privileged secrets (Supabase service key, etc.).
       - name: Deploy to Cloud Run (dev)
         run: |
           gcloud run deploy "${{ env.DEV_SERVICE }}" \
@@ -107,10 +108,9 @@ jobs:
               SUPABASE_URL=SUPABASE_URL:latest,\
               SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest,\
               SERPAPI_KEY=SERPAPI_KEY:latest,\
-              VERTEX_AI_API_KEY=VERTEX_AI_API_KEY:latest,\
               HF_API_TOKEN=HF_API_TOKEN:latest" \
             --set-env-vars "\
-              ALLOWED_ORIGINS=*,\
+              CORS_ORIGIN_REGEX=https://.*\.web\.app,\
               IMAGE_STORAGE_BACKEND=supabase,\
               SUPABASE_GARMENTS_BUCKET=garments,\
               SUPABASE_GARMENTS_TABLE=garments,\

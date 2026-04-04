@@ -6,7 +6,10 @@ on:
       - opened
       - synchronize
       - reopened
-    branches-ignore:
+    branches:
+      # Run for PRs that TARGET main — this is the standard PR workflow.
+      # branches-ignore: [main] was incorrect: the filter applies to the BASE
+      # branch, so branches-ignore: [main] meant "never run for PRs to main".
       - main
     paths:
       - "misfitai-mobile/**"
