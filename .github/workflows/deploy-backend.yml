@@ -63,6 +63,11 @@ jobs:
           IMAGE_TAG="${{ env.AR_IMAGE }}:${{ github.sha }}"
           IMAGE_LATEST="${{ env.AR_IMAGE }}:latest"
 
+          # Pull the previous 'latest' so Docker has local layers to read from
+          # when --cache-from is used. The || true means the very first build
+          # (when no 'latest' tag exists yet) does not fail.
+          docker pull "$IMAGE_LATEST" || true
+
           docker build \
             --tag "$IMAGE_TAG" \
             --tag "$IMAGE_LATEST" \

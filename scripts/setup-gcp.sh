@@ -19,17 +19,28 @@
 set -euo pipefail
 
 # ─── Configuration — edit these before running ───────────────────────────────
-GCP_PROJECT_ID="misfitai-2026"            # Your Google Cloud project ID
-GCP_REGION="us-central1"             # Cloud Run & Artifact Registry region
-AR_REPO="misfitai"                   # Artifact Registry repository name
-CLOUD_RUN_SERVICE="misfitai-backend" # Cloud Run service name
-SA_NAME="github-actions-deploy"      # Service account for GitHub Actions
-GITHUB_ORG="shivangi221b"    # GitHub org or username
-GITHUB_REPO="AI_Wardrobe_Planner"    # GitHub repository name
-WIF_POOL="github-pool"               # Workload Identity Pool name
-WIF_PROVIDER="github-provider"       # Workload Identity Provider name
-FIREBASE_PROJECT_ID="misfitai-2026" # Firebase project ID/GCP Project ID
+GCP_PROJECT_ID="YOUR_GCP_PROJECT_ID"      # e.g. my-project-123
+GCP_REGION="us-central1"                  # Cloud Run & Artifact Registry region
+AR_REPO="misfitai"                        # Artifact Registry repository name
+CLOUD_RUN_SERVICE="misfitai-backend"      # Cloud Run service name
+SA_NAME="github-actions-deploy"           # Service account for GitHub Actions
+GITHUB_ORG="YOUR_GITHUB_USERNAME_OR_ORG"  # e.g. acme-corp
+GITHUB_REPO="YOUR_GITHUB_REPO_NAME"       # e.g. AI_Wardrobe_Planner (exact, case-sensitive)
+WIF_POOL="github-pool"                    # Workload Identity Pool name
+WIF_PROVIDER="github-provider"            # Workload Identity Provider name
+FIREBASE_PROJECT_ID="YOUR_FIREBASE_PROJECT_ID" # Usually same as GCP_PROJECT_ID
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Guard: exit immediately if any placeholder value was not replaced.
+_PLACEHOLDERS=("YOUR_GCP_PROJECT_ID" "YOUR_GITHUB_USERNAME_OR_ORG" "YOUR_GITHUB_REPO_NAME" "YOUR_FIREBASE_PROJECT_ID")
+for _P in "${_PLACEHOLDERS[@]}"; do
+  if [[ "$GCP_PROJECT_ID" == "$_P" || "$GITHUB_ORG" == "$_P" || \
+        "$GITHUB_REPO" == "$_P" || "$FIREBASE_PROJECT_ID" == "$_P" ]]; then
+    echo "ERROR: Replace all placeholder values in the Configuration block before running this script." >&2
+    echo "       Placeholder still present: $_P" >&2
+    exit 1
+  fi
+done
 
 SA_EMAIL="${SA_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
 AR_HOST="${GCP_REGION}-docker.pkg.dev"

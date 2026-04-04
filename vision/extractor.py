@@ -151,7 +151,12 @@ def extract_garments_from_image(image_bytes: bytes, mime_type: str = "image/jpeg
         logger.info("Gemini response parsed model=%s", _gemini_model_name())
     except Exception as exc:
         logger.exception("Gemini extraction failed")
-        raise RuntimeError("Gemini extraction failed. Check API key/quota and retry.") from exc
+        raise RuntimeError(
+            "Gemini extraction failed via Vertex AI. "
+            "Check that GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are set, "
+            "the Cloud Run service account has the 'roles/aiplatform.user' IAM role, "
+            "and the Vertex AI API is enabled on the project."
+        ) from exc
 
     items = parsed.get("items") if isinstance(parsed, dict) else []
     if not isinstance(items, list):
