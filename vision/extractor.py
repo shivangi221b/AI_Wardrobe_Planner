@@ -71,14 +71,15 @@ class ExtractedGarmentAsset:
 
 @lru_cache(maxsize=1)
 def _gemini_client() -> genai.Client:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY.")
-    return genai.Client(api_key=api_key)
+    project = os.getenv("GOOGLE_CLOUD_PROJECT")
+    if not project:
+        raise RuntimeError("Missing GOOGLE_CLOUD_PROJECT for Vertex AI.")
+    location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    return genai.Client(vertexai=True, project=project, location=location)
 
 
 def _gemini_model_name() -> str:
-    return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    return os.getenv("VERTEX_AI_VISION_MODEL") or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def _safe_json_parse(raw_text: str) -> dict[str, Any]:
@@ -150,7 +151,12 @@ def extract_garments_from_image(image_bytes: bytes, mime_type: str = "image/jpeg
         logger.info("Gemini response parsed model=%s", _gemini_model_name())
     except Exception as exc:
         logger.exception("Gemini extraction failed")
-        raise RuntimeError("Gemini extraction failed. Check API key/quota and retry.") from exc
+        raise RuntimeError(
+            "Gemini extraction failed via Vertex AI. "
+            "Check that GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are set, "
+            "the Cloud Run service account has the 'roles/aiplatform.user' IAM role, "
+            "and the Vertex AI API is enabled on the project."
+        ) from exc
 
     items = parsed.get("items") if isinstance(parsed, dict) else []
     if not isinstance(items, list):

@@ -49,6 +49,15 @@ const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
 const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
 
+// When set, all web OAuth flows use this stable URL as the redirect URI instead
+// of window.location.origin. This lets Firebase Hosting preview channels (whose
+// dynamic *.web.app subdomains cannot be pre-registered) share a single
+// registered redirect URI with production. The production page already calls
+// WebBrowser.maybeCompleteAuthSession() at module level, which posts the token
+// back to the opener window via postMessage('*') before closing the popup.
+const webRedirectUri =
+  Platform.OS === 'web' ? (process.env.EXPO_PUBLIC_OAUTH_REDIRECT_URI ?? undefined) : undefined;
+
 export function AuthScreen({
   onAuthenticated,
 }: {
@@ -67,6 +76,9 @@ export function AuthScreen({
     // initial sign-in. Without this, returning users keep their old token which
     // lacks the calendar scope and receives a 403 from the Calendar API.
     prompt: 'consent',
+    // Override the redirect URI on web so all deployments (production and
+    // preview channels) funnel through the single registered production URL.
+    ...(webRedirectUri && { redirectUri: webRedirectUri }),
   });
 
   const entrance = useRef(new Animated.Value(0)).current;

@@ -1,0 +1,33 @@
+# Version control
+.git/
+.gitignore
+
+# Environment files — secrets must come from Secret Manager in production
+.env
+.env.example
+
+# Python artifacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Local development artefacts
+outputs/
+vision/models/
+*.pt
+*.onnx
+
+# Frontend — not needed inside the backend container
+misfitai-mobile/
+
+# Documentation / data that does not affect runtime
+data/
+docs/
+vision_stack.md
+*.md
+
+# macOS metadata
+.DS_Store
