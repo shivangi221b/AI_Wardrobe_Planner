@@ -16,6 +16,13 @@ import {
 import { useAppState } from './AppStateContext';
 import { getApiErrorMessage, type VisionPreviewItem } from './api';
 import { getImageForGarment, shoesImage } from './stockImages';
+import { SearchableSelect } from './SearchableSelect';
+import {
+  SEARCH_BRANDS,
+  SEARCH_COLORS,
+  SEARCH_MATERIALS,
+  SEARCH_KINDS_BY_CATEGORY,
+} from './searchOptions';
 import { palette, radius, type } from './theme';
 
 const SEARCH_STATUS_MESSAGES = [
@@ -70,7 +77,8 @@ export function WardrobeScreen({
   const [visionCommitting, setVisionCommitting] = useState(false);
   const [visionZoomUrl, setVisionZoomUrl] = useState<string | null>(null);
 
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchBrand, setSearchBrand] = useState('');
+  const [searchItemKeywords, setSearchItemKeywords] = useState('');
   const [searchCategory, setSearchCategory] = useState<'top' | 'bottom' | 'shoes' | 'accessory'>('top');
   const [searchColor, setSearchColor] = useState('');
   const [searchMaterial, setSearchMaterial] = useState('');
@@ -129,6 +137,10 @@ export function WardrobeScreen({
     }, 3500);
     return () => clearInterval(id);
   }, [visionSaving]);
+
+  useEffect(() => {
+    setSearchKind('');
+  }, [searchCategory]);
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -189,8 +201,11 @@ export function WardrobeScreen({
   };
 
   const handleSearch = async () => {
-    const q = searchQuery.trim();
+    const brand = searchBrand.trim();
+    const keywords = searchItemKeywords.trim();
+    const q = [brand, keywords].filter(Boolean).join(' ').trim();
     if (!q) {
+      setSearchError('Choose a brand or add item keywords (or both).');
       return;
     }
     try {
@@ -206,7 +221,7 @@ export function WardrobeScreen({
       });
       setSearchResults(results);
       if (!results.length) {
-        setSearchError('No matches found. Try a different query (brand + item + color).');
+        setSearchError('No matches found. Try different brand, keywords, or filters.');
       }
     } catch (error) {
       setSearchError(getApiErrorMessage(error, 'Search failed. Please try again.'));
@@ -223,15 +238,21 @@ export function WardrobeScreen({
     try {
       setSearchAdding(true);
       setSearchError(null);
+      const fallbackName = [searchBrand, searchKind, searchItemKeywords]
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join(' ')
+        .trim();
       await addGarmentViaSearch({
-        name: (selected.title || searchQuery || 'Garment').trim(),
+        name: (selected.title || fallbackName || 'Garment').trim(),
         category: searchCategory,
         color: searchColor.trim(),
         formality: searchFormality ?? undefined,
         seasonality: searchSeasonality ?? undefined,
         imageUrl: selected.imageUrl,
       });
-      setSearchQuery('');
+      setSearchBrand('');
+      setSearchItemKeywords('');
       setSearchColor('');
       setSearchMaterial('');
       setSearchKind('');
@@ -434,12 +455,59 @@ export function WardrobeScreen({
               <>
           <Text style={styles.visionTitle}>Search & Add</Text>
             <Text style={styles.visionCopy}>
-              Type a brand + item (e.g. “Zara black linen shirt”), pick an image, and add it instantly.
+              Pick category, brand, and filters—type in any list to narrow it—or use Other for custom values.
+              Add optional keywords, then search and choose an image.
             </Text>
+            <Text style={styles.label}>Category</Text>
+            <View style={styles.chipRow}>
+              <Pressable
+                onPress={() => setSearchCategory('top')}
+                style={[styles.chip, searchCategory === 'top' && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, searchCategory === 'top' && styles.chipTextActive]}>
+                  Top
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setSearchCategory('bottom')}
+                style={[styles.chip, searchCategory === 'bottom' && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, searchCategory === 'bottom' && styles.chipTextActive]}>
+                  Bottom
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setSearchCategory('shoes')}
+                style={[styles.chip, searchCategory === 'shoes' && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, searchCategory === 'shoes' && styles.chipTextActive]}>
+                  Footwear
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setSearchCategory('accessory')}
+                style={[styles.chip, searchCategory === 'accessory' && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, searchCategory === 'accessory' && styles.chipTextActive]}>
+                  Accessory
+                </Text>
+              </Pressable>
+            </View>
+
+            <SearchableSelect
+              label="Brand"
+              value={searchBrand}
+              onChange={setSearchBrand}
+              options={SEARCH_BRANDS}
+              placeholder="Type to filter brands…"
+              emptyLabel="Any brand"
+              optional
+            />
+            <Text style={styles.label}>Item keywords (optional)</Text>
             <TextInput
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              placeholder="Zara black shirt"
+              value={searchItemKeywords}
+              onChangeText={setSearchItemKeywords}
+              placeholder="e.g. linen shirt, running, slim fit"
               placeholderTextColor="#8f8f8a"
               style={styles.input}
               returnKeyType="search"
@@ -447,38 +515,37 @@ export function WardrobeScreen({
             />
             <View style={styles.row}>
               <View style={styles.col}>
-                <Text style={styles.label}>Colour (optional)</Text>
-                <TextInput
+                <SearchableSelect
+                  label="Colour (optional)"
                   value={searchColor}
-                  onChangeText={setSearchColor}
-                  placeholder="navy"
-                  placeholderTextColor="#8f8f8a"
-                  style={styles.input}
+                  onChange={setSearchColor}
+                  options={SEARCH_COLORS}
+                  placeholder="Type to filter colours…"
+                  emptyLabel="Any"
+                  optional
                 />
               </View>
               <View style={styles.col}>
-                <Text style={styles.label}>Material (optional)</Text>
-                <TextInput
+                <SearchableSelect
+                  label="Material (optional)"
                   value={searchMaterial}
-                  onChangeText={setSearchMaterial}
-                  placeholder="linen, wool, denim"
-                  placeholderTextColor="#8f8f8a"
-                  style={styles.input}
+                  onChange={setSearchMaterial}
+                  options={SEARCH_MATERIALS}
+                  placeholder="Type to filter materials…"
+                  emptyLabel="Any"
+                  optional
                 />
               </View>
             </View>
-            <View style={styles.row}>
-              <View style={styles.col}>
-                <Text style={styles.label}>Type/detail (optional)</Text>
-                <TextInput
-                  value={searchKind}
-                  onChangeText={setSearchKind}
-                  placeholder="double-breasted blazer, loafers"
-                  placeholderTextColor="#8f8f8a"
-                  style={styles.input}
-                />
-              </View>
-            </View>
+            <SearchableSelect
+              label="Type / detail (optional)"
+              value={searchKind}
+              onChange={setSearchKind}
+              options={SEARCH_KINDS_BY_CATEGORY[searchCategory]}
+              placeholder="Type to filter types…"
+              emptyLabel="Any"
+              optional
+            />
             <View style={styles.row}>
               <View style={styles.col}>
                 <Text style={styles.label}>For (optional)</Text>
@@ -529,76 +596,6 @@ export function WardrobeScreen({
                       ]}
                     >
                       Men
-                    </Text>
-                  </Pressable>
-                </View>
-              </View>
-
-              <View style={styles.col}>
-                <Text style={styles.label}>Category</Text>
-                <View style={styles.chipRow}>
-                  <Pressable
-                    onPress={() => setSearchCategory('top')}
-                    style={[
-                      styles.chip,
-                      searchCategory === 'top' && styles.chipActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        searchCategory === 'top' && styles.chipTextActive,
-                      ]}
-                    >
-                      Top
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => setSearchCategory('bottom')}
-                    style={[
-                      styles.chip,
-                      searchCategory === 'bottom' && styles.chipActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        searchCategory === 'bottom' && styles.chipTextActive,
-                      ]}
-                    >
-                      Bottom
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => setSearchCategory('shoes')}
-                    style={[
-                      styles.chip,
-                      searchCategory === 'shoes' && styles.chipActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        searchCategory === 'shoes' && styles.chipTextActive,
-                      ]}
-                    >
-                      Footwear
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => setSearchCategory('accessory')}
-                    style={[
-                      styles.chip,
-                      searchCategory === 'accessory' && styles.chipActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        searchCategory === 'accessory' && styles.chipTextActive,
-                      ]}
-                    >
-                      Accessory
                     </Text>
                   </Pressable>
                 </View>
