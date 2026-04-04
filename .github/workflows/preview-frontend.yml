@@ -62,7 +62,23 @@ jobs:
           EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID }}
         run: npx expo export --platform web
 
-      # ── 5. Deploy to Firebase Hosting preview channel ─────────────────────────
+      # ── 5. Strip Cloud Run rewrites for preview deploy ────────────────────────
+      # Firebase Hosting validates every rewrite rule at deploy time by calling
+      # run.services.get on the target Cloud Run service. For preview channels
+      # this is wrong on two counts:
+      #   1. Preview builds call DEV_BACKEND_URL directly (baked in above), so
+      #      the production Cloud Run rewrites are never used.
+      #   2. The production backend may not exist yet when the first PR is opened.
+      # jq filters out any rewrite with a "run" key, leaving only the SPA
+      # catch-all. The production firebase.json on disk is not committed back,
+      # so this only affects the in-workflow deploy step.
+      - name: Strip Cloud Run rewrites for preview deploy
+        run: |
+          jq '.hosting.rewrites = [.hosting.rewrites[] | select(.run == null)]' \
+            firebase.json > firebase.tmp.json
+          mv firebase.tmp.json firebase.json
+
+      # ── 6. Deploy to Firebase Hosting preview channel ─────────────────────────
       # channelId is scoped to the PR number so every PR gets exactly one stable
       # preview URL that is updated on each push, rather than creating a new URL
       # for every commit. The action automatically posts the preview URL as a
