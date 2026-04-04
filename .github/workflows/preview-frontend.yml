@@ -17,6 +17,11 @@ on:
       - ".firebaserc"
       - ".github/workflows/preview-frontend.yml"
 
+permissions:
+  contents: read
+  checks: write        # FirebaseExtended/action-hosting-deploy creates a Check Run
+  pull-requests: write # action posts the preview URL as a PR comment
+
 jobs:
   build-and-preview:
     name: Build Expo Web & Deploy Preview Channel
