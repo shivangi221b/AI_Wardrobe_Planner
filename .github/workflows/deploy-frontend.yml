@@ -48,6 +48,10 @@ jobs:
           EXPO_PUBLIC_API_BASE_URL: "https://${{ secrets.FIREBASE_PROJECT_ID }}.web.app"
           EXPO_PUBLIC_USE_MOCK_API: "false"
           EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID }}
+          # Stable redirect URI registered in Google Cloud Console.
+          # All web deployments (production and preview channels) use this same
+          # URI so Google only needs one entry in its Authorized redirect URIs list.
+          EXPO_PUBLIC_OAUTH_REDIRECT_URI: "https://${{ secrets.FIREBASE_PROJECT_ID }}.web.app"
         run: npx expo export --platform web
 
       # ── 5. Deploy to Firebase Hosting ────────────────────────────────────────

@@ -60,6 +60,11 @@ jobs:
           EXPO_PUBLIC_API_BASE_URL: ${{ secrets.DEV_BACKEND_URL }}
           EXPO_PUBLIC_USE_MOCK_API: "false"
           EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID }}
+          # Preview channel URLs are dynamically generated (*.web.app with a random hash)
+          # and cannot be registered in Google Cloud Console. Point OAuth redirects at
+          # the stable production URL instead. That page calls maybeCompleteAuthSession()
+          # which posts the token back to this window via postMessage before closing.
+          EXPO_PUBLIC_OAUTH_REDIRECT_URI: "https://${{ secrets.FIREBASE_PROJECT_ID }}.web.app"
         run: npx expo export --platform web
 
       # ── 5. Strip Cloud Run rewrites for preview deploy ────────────────────────
