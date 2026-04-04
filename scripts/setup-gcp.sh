@@ -29,6 +29,10 @@ GITHUB_REPO="YOUR_GITHUB_REPO_NAME"       # e.g. AI_Wardrobe_Planner (exact, cas
 WIF_POOL="github-pool"                    # Workload Identity Pool name
 WIF_PROVIDER="github-provider"            # Workload Identity Provider name
 FIREBASE_PROJECT_ID="YOUR_FIREBASE_PROJECT_ID" # Usually same as GCP_PROJECT_ID
+# Firebase Hosting service account — created by `firebase init hosting:github`
+# or via Firebase Console → Project Settings → Service accounts.
+# Leave blank on first run; fill in and re-run after Firebase is initialised.
+FIREBASE_SA_EMAIL=""  # e.g. github-action-123456@my-project.iam.gserviceaccount.com
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Guard: exit immediately if any placeholder value was not replaced.
@@ -106,15 +110,39 @@ for ROLE in \
 done
 echo "    IAM roles granted."
 
-# Grant the Cloud Run runtime identity (default compute SA) permission to call
-# Vertex AI — required for the vision extractor and LLM client running in Cloud Run.
+# Grant the Cloud Run runtime identity (default compute SA) the permissions it
+# needs while serving requests — Vertex AI calls and Secret Manager access.
 PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT_ID" --format="value(projectNumber)")
 COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
-  --member="serviceAccount:${COMPUTE_SA}" \
-  --role="roles/aiplatform.user" \
-  --quiet
-echo "    Granted roles/aiplatform.user to Cloud Run runtime SA: ${COMPUTE_SA}"
+for RUNTIME_ROLE in \
+  "roles/aiplatform.user" \
+  "roles/secretmanager.secretAccessor"; do
+  gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="$RUNTIME_ROLE" \
+    --quiet
+done
+echo "    Granted roles/aiplatform.user + roles/secretmanager.secretAccessor to Cloud Run runtime SA: ${COMPUTE_SA}"
+
+# Grant the Firebase Hosting service account read access to Cloud Run so it can
+# validate rewrite rules in firebase.json at deploy time (run.services.get).
+# Firebase Hosting calls this API for every `firebase deploy` and channel deploy.
+if [[ -n "$FIREBASE_SA_EMAIL" ]]; then
+  gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+    --member="serviceAccount:${FIREBASE_SA_EMAIL}" \
+    --role="roles/run.viewer" \
+    --quiet
+  echo "    Granted roles/run.viewer to Firebase SA: ${FIREBASE_SA_EMAIL}"
+else
+  echo ""
+  echo "    ⚠  FIREBASE_SA_EMAIL is not set — skipping Firebase SA IAM binding."
+  echo "    After running \`firebase init hosting:github\`, fill in FIREBASE_SA_EMAIL"
+  echo "    at the top of this script and re-run, OR run this command manually:"
+  echo ""
+  echo "    gcloud projects add-iam-policy-binding ${GCP_PROJECT_ID} \\"
+  echo "      --member=\"serviceAccount:YOUR_FIREBASE_SA_EMAIL\" \\"
+  echo "      --role=\"roles/run.viewer\""
+fi
 
 # ── 4. Workload Identity Federation ───────────────────────────────────────────
 echo ""
@@ -173,7 +201,6 @@ SECRETS=(
   "SUPABASE_URL"
   "SUPABASE_SERVICE_KEY"
   "SERPAPI_KEY"
-  "VERTEX_AI_API_KEY"
   "HF_API_TOKEN"
   "ALLOWED_ORIGINS"
 )
