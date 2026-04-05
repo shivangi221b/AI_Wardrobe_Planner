@@ -99,6 +99,13 @@
         }
       },
       {
+        "source": "/api/**",
+        "run": {
+          "serviceId": "misfitai-backend",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
