@@ -1,0 +1,136 @@
+name: Preview Backend (Dev) — Cloud Run
+
+on:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - "backend/**"
+      - "vision/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/preview-backend.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_REGION: ${{ secrets.GCP_REGION }}
+  AR_IMAGE: ${{ secrets.AR_IMAGE }}
+  # Separate Cloud Run service for dev/preview so production is never touched
+  # by non-main branch builds.
+  DEV_SERVICE: misfitai-backend-dev
+
+jobs:
+  build-and-deploy-dev:
+    name: Build & Deploy Dev Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout code ─────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Authenticate to Google Cloud via Workload Identity Federation ─────
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # ── 3. Set up gcloud CLI ──────────────────────────────────────────────────
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── 4. Configure Docker for Artifact Registry ─────────────────────────────
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ env.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      # ── 5. Build Docker image ─────────────────────────────────────────────────
+      # Two tags: a per-branch tag for traceability and 'dev-latest' so the next
+      # build on this branch can use it as a cache source.
+      - name: Build Docker image
+        run: |
+          # Sanitize branch name: lowercase, replace / and _ with -, cap at 40 chars.
+          BRANCH_SLUG=$(echo "${{ github.ref_name }}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | tr '_/' '-' \
+            | cut -c1-40)
+
+          IMAGE_BRANCH="${{ env.AR_IMAGE }}:branch-${BRANCH_SLUG}"
+          IMAGE_DEV_LATEST="${{ env.AR_IMAGE }}:dev-latest"
+
+          docker pull "$IMAGE_DEV_LATEST" || true
+
+          docker build \
+            --tag "$IMAGE_BRANCH" \
+            --tag "$IMAGE_DEV_LATEST" \
+            --cache-from "$IMAGE_DEV_LATEST" \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            .
+
+          echo "IMAGE_BRANCH=$IMAGE_BRANCH" >> "$GITHUB_ENV"
+          echo "IMAGE_DEV_LATEST=$IMAGE_DEV_LATEST" >> "$GITHUB_ENV"
+        env:
+          DOCKER_BUILDKIT: "1"
+
+      # ── 6. Push image to Artifact Registry ───────────────────────────────────
+      - name: Push image to Artifact Registry
+        run: |
+          docker push "${{ env.IMAGE_BRANCH }}"
+          docker push "${{ env.IMAGE_DEV_LATEST }}"
+
+      # ── 7. Deploy to misfitai-backend-dev Cloud Run ───────────────────────────
+      # CORS_ORIGIN_REGEX=https://.*\.web\.app allows any Firebase Hosting domain
+      # (including dynamically-generated preview channel subdomains) without
+      # opening CORS to all origins. Never use ALLOWED_ORIGINS=* on any service
+      # that mounts privileged secrets (Supabase service key, etc.).
+      - name: Deploy to Cloud Run (dev)
+        run: |
+          gcloud run deploy "${{ env.DEV_SERVICE }}" \
+            --image "${{ env.IMAGE_BRANCH }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --memory 4Gi \
+            --cpu 2 \
+            --min-instances 0 \
+            --max-instances 5 \
+            --concurrency 80 \
+            --timeout 300 \
+            --set-secrets "\
+              SUPABASE_URL=SUPABASE_URL:latest,\
+              SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest,\
+              SERPAPI_KEY=SERPAPI_KEY:latest,\
+              HF_API_TOKEN=HF_API_TOKEN:latest" \
+            --set-env-vars "\
+              CORS_ORIGIN_REGEX=https://.*\.web\.app,\
+              IMAGE_STORAGE_BACKEND=supabase,\
+              SUPABASE_GARMENTS_BUCKET=garments,\
+              SUPABASE_GARMENTS_TABLE=garments,\
+              VERTEX_AI_MODEL=gemini-2.0-flash,\
+              GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }},\
+              GOOGLE_CLOUD_LOCATION=${{ env.GCP_REGION }},\
+              VERTEX_AI_VISION_MODEL=gemini-2.5-flash" \
+            --quiet
+
+      # ── 8. Print the dev service URL ──────────────────────────────────────────
+      # After the FIRST successful run: copy this URL and save it as the
+      # DEV_BACKEND_URL GitHub repository secret. The preview-frontend workflow
+      # reads that secret to point preview builds at this service.
+      - name: Get dev service URL
+        run: |
+          DEV_URL=$(gcloud run services describe "${{ env.DEV_SERVICE }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --format="value(status.url)")
+          echo "Dev backend deployed to: $DEV_URL"
+          echo "### Dev backend URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "$DEV_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "If this is the first deploy, add **\`DEV_BACKEND_URL\`** = \`$DEV_URL\` as a GitHub repository secret." >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,55 @@
+name: Cleanup Preview Channel — Firebase Hosting
+
+on:
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  delete-preview-channel:
+    name: Delete Firebase Hosting Preview Channel
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout code ──────────────────────────────────────────────────────
+      # Required so firebase-tools can read firebase.json / .firebaserc.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Node.js ──────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ── 3. Install Firebase CLI ───────────────────────────────────────────────
+      - name: Install firebase-tools
+        run: npm install -g firebase-tools
+
+      # ── 4. Authenticate to Firebase ───────────────────────────────────────────
+      # Uses the same service account JSON secret used for deployments.
+      - name: Authenticate to Firebase
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/firebase-sa.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json" >> "$GITHUB_ENV"
+
+      # ── 5. Delete the preview channel ─────────────────────────────────────────
+      # Matches the channelId created by preview-frontend.yml: pr-<PR_NUMBER>.
+      # --force skips the interactive confirmation prompt.
+      # The || true prevents the step from failing if the channel was already
+      # expired or manually deleted before the PR was closed.
+      - name: Delete preview channel
+        run: |
+          CHANNEL_ID="pr-${{ github.event.pull_request.number }}"
+          firebase hosting:channel:delete "$CHANNEL_ID" \
+            --project "${{ secrets.FIREBASE_PROJECT_ID }}" \
+            --force \
+          || echo "Channel '$CHANNEL_ID' not found or already deleted — skipping."
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/firebase-sa.json
+
+      # ── 6. Cleanup credentials ────────────────────────────────────────────────
+      - name: Remove temporary credentials file
+        if: always()
+        run: rm -f /tmp/firebase-sa.json

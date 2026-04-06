@@ -52,9 +52,17 @@ _raw_origins = os.getenv(
 )
 _allowed_origins: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
+# Optional regex for origins that cannot be enumerated statically, e.g. Firebase
+# Hosting preview channels whose subdomain contains a random hash.
+# Example (dev Cloud Run): CORS_ORIGIN_REGEX=https://.*\.web\.app
+# Starlette raises ValueError if allow_origins=["*"] AND allow_credentials=True,
+# so use this regex pattern instead of ALLOWED_ORIGINS=* for open-CORS dev envs.
+_cors_origin_regex: str | None = os.getenv("CORS_ORIGIN_REGEX", "").strip() or None
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
