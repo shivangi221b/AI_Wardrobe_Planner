@@ -31,17 +31,15 @@ export type UserProfile = {
   photoUrl?: string | null;
   /** Google/Apple may not provide; user can set in app later. */
   gender?: 'male' | 'female' | 'other' | null;
-  /** Birthday from Google People API (YYYY-MM-DD) if available and shared. */
+  /** Birthday captured in-app (YYYY-MM-DD) if provided. */
   birthday?: string | null;
 };
 
-/** Scopes we request from Google: name, email, photo, gender, birthday, and calendar read. */
+/** Scopes we request from Google: OpenID identity + calendar read-only. */
 const GOOGLE_SCOPES = [
   'openid',
   'https://www.googleapis.com/auth/userinfo.profile',
   'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/user.gender.read',
-  'https://www.googleapis.com/auth/user.birthday.read',
   'https://www.googleapis.com/auth/calendar.readonly',
 ];
 
@@ -92,41 +90,25 @@ export function AuthScreen({
   }, [entrance]);
 
   const fetchGoogleProfile = useCallback(async (accessToken: string): Promise<UserProfile> => {
-    const personFields = 'genders,birthdays,names,emailAddresses,photos';
-    const res = await fetch(
-      `https://people.googleapis.com/v1/people/me?personFields=${personFields}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
+    // Use the standard userinfo endpoint (non-sensitive). Avoid Google People API
+    // so we don't request sensitive scopes (birthday/gender).
+    const res = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
     if (!res.ok) return {};
     const data = (await res.json()) as {
-      resourceName?: string;
-      genders?: Array<{ value?: string }>;
-      birthdays?: Array<{ date?: { year?: number; month?: number; day?: number } }>;
-      names?: Array<{ displayName?: string }>;
-      emailAddresses?: Array<{ value?: string }>;
-      photos?: Array<{ url?: string }>;
+      sub?: string;
+      email?: string;
+      name?: string;
+      picture?: string;
     };
-    const resourceName = data.resourceName;
-    const id = resourceName
-      ? `google-${resourceName.replace(/^people\//, '')}`
-      : null;
-    const genderRaw = data.genders?.[0]?.value;
-    const gender =
-      genderRaw === 'male' || genderRaw === 'female' || genderRaw === 'other'
-        ? genderRaw
-        : null;
-    const b = data.birthdays?.[0]?.date;
-    const birthday =
-      b && b.year != null && b.month != null && b.day != null
-        ? `${b.year}-${String(b.month).padStart(2, '0')}-${String(b.day).padStart(2, '0')}`
-        : null;
     return {
-      id,
-      email: data.emailAddresses?.[0]?.value ?? null,
-      displayName: data.names?.[0]?.displayName ?? null,
-      photoUrl: data.photos?.[0]?.url ?? null,
-      gender,
-      birthday,
+      id: data.sub ? `google-${data.sub}` : null,
+      email: data.email ?? null,
+      displayName: data.name ?? null,
+      photoUrl: data.picture ?? null,
+      gender: null,
+      birthday: null,
     };
   }, []);
 

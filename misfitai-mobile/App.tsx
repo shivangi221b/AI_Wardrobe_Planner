@@ -9,6 +9,7 @@ import { WeeklyPlanScreen } from './src/WeeklyPlanScreen';
 import { registerSignupWithBackend, USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
+import { ProfileSetupScreen } from './src/ProfileSetupScreen';
 import { palette, radius, type } from './src/theme';
 import { initAnalytics, trackAuthSuccess } from './src/analytics';
 
@@ -22,6 +23,8 @@ type Session = {
   profile?: UserProfile;
   /** Stable user id derived at auth-time, used for all API calls. */
   userId: string;
+  /** If true, optional profile questions were completed (or intentionally skipped). */
+  profileCompleted?: boolean;
 };
 
 /** Stable user id for API/Supabase: provider id, or normalized email, or fallback. */
@@ -154,7 +157,13 @@ export default function App() {
   const handleAuthenticated = useCallback(
     (provider: AuthProvider, mode: AuthMode, profile?: UserProfile, accessToken?: string) => {
       const userId = deriveUserIdFromProfile(profile);
-      const next: Session = { provider, mode, profile, userId };
+      const next: Session = {
+        provider,
+        mode,
+        profile,
+        userId,
+        profileCompleted: mode === 'signup' ? false : true,
+      };
       setSession(next);
       trackAuthSuccess(provider);
       AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
@@ -179,6 +188,23 @@ export default function App() {
 
   if (!session) {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
+  }
+
+  if (session.mode === 'signup' && session.profileCompleted !== true) {
+    return (
+      <ProfileSetupScreen
+        initialProfile={session.profile}
+        onDone={(profilePatch) => {
+          const next: Session = {
+            ...session,
+            profile: { ...(session.profile ?? {}), ...profilePatch },
+            profileCompleted: true,
+          };
+          setSession(next);
+          AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+        }}
+      />
+    );
   }
 
   return (
