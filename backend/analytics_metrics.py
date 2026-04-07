@@ -4,6 +4,8 @@ Aggregate product metrics for an internal dashboard.
 - **signups**: ``max(Supabase Auth users, signup-registry rows, distinct wardrobe user_id)``.
   The client calls ``POST /analytics/register`` after login so OAuth users count
   even with an empty wardrobe (requires Supabase table ``analytics_registered_users``).
+  Distinct wardrobe users use RPC ``metrics_count_distinct_garment_users`` when deployed
+  (see ``scripts/sql/metrics_count_distinct_garment_users.sql``); otherwise paginated ``user_id`` fetches.
 - **waitlist**: if ``FORMSPREE_FORM_ID`` + ``FORMSPREE_API_KEY`` are set, count via
   Formspree Submissions API (paid plans); else CSV URL; else Supabase ``waitlist`` table.
 - **page_views** / **active_users**: Google Analytics 4, when ``GA4_PROPERTY_ID``
