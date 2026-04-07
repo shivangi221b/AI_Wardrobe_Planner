@@ -257,15 +257,17 @@ export function AuthScreen({
         </View>
 
         <View style={styles.authCard}>
-          <Pressable
-            onPress={handleAppleAuth}
-            disabled={loadingProvider !== null}
-            style={[styles.providerButton, styles.providerButtonPrimary]}
-          >
-            <Text style={styles.providerButtonPrimaryText}>
-              {loadingProvider === 'apple' ? 'Connecting Apple...' : 'Continue with Apple'}
-            </Text>
-          </Pressable>
+          {Platform.OS === 'ios' && (
+            <Pressable
+              onPress={handleAppleAuth}
+              disabled={loadingProvider !== null}
+              style={[styles.providerButton, styles.providerButtonPrimary]}
+            >
+              <Text style={styles.providerButtonPrimaryText}>
+                {loadingProvider === 'apple' ? 'Connecting Apple...' : 'Continue with Apple'}
+              </Text>
+            </Pressable>
+          )}
 
           <Pressable
             onPress={handleGoogleAuth}
