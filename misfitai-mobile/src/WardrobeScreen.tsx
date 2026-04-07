@@ -77,6 +77,7 @@ export function WardrobeScreen({
   const [visionCommitting, setVisionCommitting] = useState(false);
   const [visionZoomUrl, setVisionZoomUrl] = useState<string | null>(null);
 
+  const [searchQuery, setSearchQuery] = useState('');
   const [searchBrand, setSearchBrand] = useState('');
   const [searchItemKeywords, setSearchItemKeywords] = useState('');
   const [searchCategory, setSearchCategory] = useState<'top' | 'bottom' | 'shoes' | 'accessory'>('top');
@@ -494,7 +495,7 @@ export function WardrobeScreen({
               </>
             ) : null}
 
-            {addMode === 'search' ? (
+            {false ? (
               <>
           <Text style={styles.visionTitle}>Search & Add</Text>
             <Text style={styles.visionCopy}>
@@ -851,6 +852,48 @@ export function WardrobeScreen({
                   })}
                 </View>
 
+                <SearchableSelect
+                  label="Brand (optional)"
+                  value={searchBrand}
+                  onChange={setSearchBrand}
+                  options={SEARCH_BRANDS}
+                  placeholder="Type to filter brands…"
+                  emptyLabel="Any brand"
+                  optional
+                />
+                <View style={styles.row}>
+                  <View style={styles.col}>
+                    <SearchableSelect
+                      label="Colour (optional)"
+                      value={searchColor}
+                      onChange={setSearchColor}
+                      options={SEARCH_COLORS}
+                      placeholder="Type to filter colours…"
+                      emptyLabel="Any"
+                      optional
+                    />
+                  </View>
+                  <View style={styles.col}>
+                    <SearchableSelect
+                      label="Material (optional)"
+                      value={searchMaterial}
+                      onChange={setSearchMaterial}
+                      options={SEARCH_MATERIALS}
+                      placeholder="Type to filter materials…"
+                      emptyLabel="Any"
+                      optional
+                    />
+                  </View>
+                </View>
+                <SearchableSelect
+                  label="Type / detail (optional)"
+                  value={searchKind}
+                  onChange={setSearchKind}
+                  options={SEARCH_KINDS_BY_CATEGORY[category]}
+                  placeholder="Type to filter types…"
+                  emptyLabel="Any"
+                  optional
+                />
                 <Text style={[styles.visionTitle, { marginTop: 14 }]}>Search image (optional)</Text>
                 <Text style={styles.visionCopy}>
                   Type a brand + item to find a product image. Pick one to attach it when saving.
@@ -864,40 +907,6 @@ export function WardrobeScreen({
                   returnKeyType="search"
                   onSubmitEditing={handleSearch}
                 />
-                <View style={styles.row}>
-                  <View style={styles.col}>
-                    <Text style={styles.label}>Colour (optional)</Text>
-                    <TextInput
-                      value={searchColor}
-                      onChangeText={setSearchColor}
-                      placeholder="navy"
-                      placeholderTextColor="#8f8f8a"
-                      style={styles.input}
-                    />
-                  </View>
-                  <View style={styles.col}>
-                    <Text style={styles.label}>Material (optional)</Text>
-                    <TextInput
-                      value={searchMaterial}
-                      onChangeText={setSearchMaterial}
-                      placeholder="linen, wool, denim"
-                      placeholderTextColor="#8f8f8a"
-                      style={styles.input}
-                    />
-                  </View>
-                </View>
-                <View style={styles.row}>
-                  <View style={styles.col}>
-                    <Text style={styles.label}>Type/detail (optional)</Text>
-                    <TextInput
-                      value={searchKind}
-                      onChangeText={setSearchKind}
-                      placeholder="double-breasted blazer, loafers"
-                      placeholderTextColor="#8f8f8a"
-                      style={styles.input}
-                    />
-                  </View>
-                </View>
                 <View style={styles.row}>
                   <View style={styles.col}>
                     <Text style={styles.label}>For (optional)</Text>
