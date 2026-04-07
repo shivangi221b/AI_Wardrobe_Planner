@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from functools import lru_cache
@@ -15,7 +16,11 @@ from .models import (
     build_garment_tags,
 )
 
+logger = logging.getLogger(__name__)
+
 _local_wardrobes: dict[str, List[GarmentItem]] = {}
+# OAuth logins (no Supabase Auth): POST /analytics/register fills this in local dev.
+_local_signup_user_ids: set[str] = set()
 
 
 @lru_cache(maxsize=1)
@@ -38,6 +43,45 @@ def _use_local_store() -> bool:
 
 def _table_name() -> str:
     return os.getenv("SUPABASE_GARMENTS_TABLE", "garments")
+
+
+def _signup_registry_table() -> str:
+    return (os.getenv("SUPABASE_SIGNUPS_TABLE") or "analytics_registered_users").strip() or "analytics_registered_users"
+
+
+def register_signup_user_id(user_id: str) -> None:
+    """
+    Idempotent: record that *user_id* completed app login (OAuth) for metrics.
+
+    Requires table ``analytics_registered_users`` (see ``scripts/sql/analytics_registered_users.sql``).
+    """
+    uid = (user_id or "").strip()
+    if not uid or len(uid) > 512:
+        return
+    if _use_local_store():
+        _local_signup_user_ids.add(uid)
+        return
+    try:
+        get_supabase_client().table(_signup_registry_table()).upsert({"user_id": uid}).execute()
+    except Exception:
+        logger.exception("register_signup_user_id failed user_id=%r", uid[:80])
+
+
+def count_registered_signups() -> int:
+    """Rows in the signup registry table (or local set size)."""
+    if _use_local_store():
+        return len(_local_signup_user_ids)
+    try:
+        result = (
+            get_supabase_client()
+            .table(_signup_registry_table())
+            .select("user_id", count="exact", head=True)
+            .execute()
+        )
+        return int(result.count or 0)
+    except Exception:
+        logger.exception("count_registered_signups failed")
+        return 0
 
 
 def _parse_category(value: Any) -> GarmentCategory:
@@ -123,6 +167,105 @@ def _row_to_garment(row: dict[str, Any]) -> GarmentItem:
         created_at=_parse_datetime(row.get("created_at")),
         updated_at=_parse_datetime(row.get("updated_at")),
     )
+
+
+def _rpc_name_for_distinct_garment_users() -> Optional[str]:
+    """RPC that returns COUNT(DISTINCT user_id); see scripts/sql/metrics_count_distinct_garment_users.sql."""
+    explicit = (os.getenv("SUPABASE_GARMENTS_DISTINCT_USERS_RPC") or "").strip()
+    if explicit:
+        return explicit
+    if _table_name() == "garments":
+        return "metrics_count_distinct_garment_users"
+    return None
+
+
+def _parse_rpc_scalar_int(data: Any) -> Optional[int]:
+    if data is None:
+        return None
+    if isinstance(data, bool):
+        return None
+    if isinstance(data, int):
+        return data
+    if isinstance(data, float):
+        return int(data)
+    if isinstance(data, str) and data.isdigit():
+        return int(data)
+    if isinstance(data, list) and len(data) == 1:
+        return _parse_rpc_scalar_int(data[0])
+    if isinstance(data, dict) and len(data) == 1:
+        return _parse_rpc_scalar_int(next(iter(data.values())))
+    return None
+
+
+def _count_distinct_wardrobe_user_ids_via_rpc() -> Optional[int]:
+    name = _rpc_name_for_distinct_garment_users()
+    if not name:
+        return None
+    try:
+        result = get_supabase_client().rpc(name).execute()
+        n = _parse_rpc_scalar_int(result.data)
+        return n if n is not None and n >= 0 else None
+    except Exception:
+        logger.warning(
+            "RPC %r unavailable or failed; falling back to paginated distinct count",
+            name,
+            exc_info=True,
+        )
+        return None
+
+
+def _count_distinct_wardrobe_user_ids_paginated() -> int:
+    """Fetch only ``user_id`` in pages; memory O(distinct users), not O(rows)."""
+    client = get_supabase_client()
+    table = _table_name()
+    page_size = 1000
+    seen: set[str] = set()
+    offset = 0
+    try:
+        while True:
+            result = (
+                client.table(table)
+                .select("user_id")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows = result.data or []
+            for row in rows:
+                uid = row.get("user_id")
+                if uid is not None:
+                    seen.add(str(uid))
+            if len(rows) < page_size:
+                break
+            offset += page_size
+            if offset > 10_000_000:
+                logger.warning(
+                    "count_distinct_wardrobe_user_ids pagination stopped at offset=%s", offset
+                )
+                break
+        return len(seen)
+    except Exception:
+        logger.exception("count_distinct_wardrobe_user_ids paginated query failed")
+        return 0
+
+
+def count_distinct_wardrobe_user_ids() -> int:
+    """
+    Distinct ``user_id`` values in the garments table (or local store keys).
+
+    The mobile app signs in with Google/Apple via OAuth only — it does **not**
+    create Supabase Auth users — so this count is used as a practical signup
+    proxy for anyone who has saved at least one garment.
+
+    Prefer ``metrics_count_distinct_garment_users`` RPC (single round-trip, server-side
+    ``COUNT(DISTINCT)``). If the RPC is missing, the table is not ``garments``, or the
+    call fails, falls back to paginated ``user_id`` scans (bounded memory by distinct users).
+    """
+    if _use_local_store():
+        return len(_local_wardrobes)
+    via_rpc = _count_distinct_wardrobe_user_ids_via_rpc()
+    if via_rpc is not None:
+        return via_rpc
+    return _count_distinct_wardrobe_user_ids_paginated()
 
 
 def get_wardrobe(user_id: str) -> List[GarmentItem]:

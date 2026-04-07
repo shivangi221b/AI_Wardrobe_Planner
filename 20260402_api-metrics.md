@@ -1,1 +1,1 @@
-https://stats-representations-entrepreneur-smtp.trycloudflare.com/api/metrics
+https://misfitai-2026.web.app/api/metrics

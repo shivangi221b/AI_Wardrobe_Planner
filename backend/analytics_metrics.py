@@ -1,11 +1,13 @@
 """
 Aggregate product metrics for an internal dashboard.
 
-- **signups**: Supabase Auth user count (all time), when the project URL and
-  service role key are configured.
-- **waitlist**: prefer a **published CSV URL** (Google Sheets export, etc.) fetched on
-  each request; otherwise row count on an optional Supabase table (default
-  ``waitlist``).
+- **signups**: ``max(Supabase Auth users, signup-registry rows, distinct wardrobe user_id)``.
+  The client calls ``POST /analytics/register`` after login so OAuth users count
+  even with an empty wardrobe (requires Supabase table ``analytics_registered_users``).
+  Distinct wardrobe users use RPC ``metrics_count_distinct_garment_users`` when deployed
+  (see ``scripts/sql/metrics_count_distinct_garment_users.sql``); otherwise paginated ``user_id`` fetches.
+- **waitlist**: if ``FORMSPREE_FORM_ID`` + ``FORMSPREE_API_KEY`` are set, count via
+  Formspree Submissions API (paid plans); else CSV URL; else Supabase ``waitlist`` table.
 - **page_views** / **active_users**: Google Analytics 4, when ``GA4_PROPERTY_ID``
   and Application Default Credentials (or ``GOOGLE_APPLICATION_CREDENTIALS``)
   are configured.
@@ -27,6 +29,8 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 import httpx
+
+from .db import count_distinct_wardrobe_user_ids, count_registered_signups
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +90,14 @@ def count_supabase_auth_users() -> int:
         return 0
 
 
+def count_signups() -> int:
+    """Supabase Auth, login registry (POST /analytics/register), and wardrobe owners."""
+    auth_n = count_supabase_auth_users()
+    registered_n = count_registered_signups()
+    wardrobe_n = count_distinct_wardrobe_user_ids()
+    return max(auth_n, registered_n, wardrobe_n)
+
+
 def _csv_row_is_nonempty(row: list[str]) -> bool:
     return any((cell or "").strip() for cell in row)
 
@@ -131,10 +143,61 @@ def count_waitlist_from_csv_url(url: str) -> int:
         return 0
 
 
+def count_formspree_waitlist_submissions() -> Optional[int]:
+    """
+    Formspree Submissions API (HTTP Basic: empty user, API key as password).
+    Returns ``None`` when not configured. On API errors returns ``0``.
+    Requires a Formspree plan that exposes the API (see Formspree docs).
+    """
+    form_id = (os.getenv("FORMSPREE_FORM_ID") or "").strip()
+    api_key = (os.getenv("FORMSPREE_API_KEY") or "").strip()
+    if not form_id or not api_key:
+        return None
+    url = f"https://formspree.io/api/0/forms/{form_id}/submissions"
+    total = 0
+    offset = 0
+    limit = 100
+    try:
+        with httpx.Client(timeout=30.0, auth=("", api_key)) as client:
+            while True:
+                resp = client.get(
+                    url,
+                    params={"limit": limit, "offset": offset, "spam": "false"},
+                )
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "Formspree submissions failed status=%s body=%s",
+                        resp.status_code,
+                        resp.text[:400],
+                    )
+                    return 0
+                data = resp.json()
+                subs = data.get("submissions") if isinstance(data, dict) else None
+                if subs is None and isinstance(data, list):
+                    subs = data
+                if not isinstance(subs, list):
+                    return 0
+                total += len(subs)
+                if len(subs) < limit:
+                    break
+                offset += limit
+                if offset > 50_000:
+                    logger.warning("Formspree pagination stopped at offset=%s", offset)
+                    break
+        return total
+    except Exception:
+        logger.exception("Formspree waitlist count failed")
+        return 0
+
+
 def count_waitlist_rows() -> int:
     """
-    Waitlist size: ``WAITLIST_SHEET_CSV_URL`` if set (live CSV fetch), else Supabase table.
+    Waitlist: Formspree API if configured, else CSV URL, else Supabase table.
     """
+    fp = count_formspree_waitlist_submissions()
+    if fp is not None:
+        return fp
+
     csv_url = (os.getenv("WAITLIST_SHEET_CSV_URL") or "").strip()
     if csv_url:
         return count_waitlist_from_csv_url(csv_url)
@@ -220,7 +283,7 @@ def build_analytics_summary(*, period_days: int = 28) -> dict:
             "dummy_data": True,
         }
 
-    signups = count_supabase_auth_users()
+    signups = count_signups()
     waitlist = count_waitlist_rows()
     ga_pv, ga_au = fetch_ga4_screen_metrics(period_days)
     page_views = 0 if ga_pv is None else ga_pv

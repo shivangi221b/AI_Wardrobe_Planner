@@ -24,6 +24,19 @@ export const USE_MOCK_API =
     : process.env.EXPO_PUBLIC_USE_MOCK_API === 'false'
       ? false
       : __DEV__;
+
+/** After OAuth login, record user for GET /api/metrics ``signups`` (no wardrobe required). */
+export function registerSignupWithBackend(userId: string): void {
+  if (!userId?.trim() || USE_MOCK_API) return;
+  void fetch(`${API_BASE_URL}/analytics/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId.trim() }),
+  }).catch(() => {
+    /* ignore network errors */
+  });
+}
+
 const validEventTypes: EventType[] = [
   'work_meeting',
   'date_night',

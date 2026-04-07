@@ -6,7 +6,7 @@ import { AppStateProvider, useAppState } from './src/AppStateContext';
 import { WardrobeScreen } from './src/WardrobeScreen';
 import { EventsScreen } from './src/EventsScreen';
 import { WeeklyPlanScreen } from './src/WeeklyPlanScreen';
-import { USE_MOCK_API } from './src/api';
+import { registerSignupWithBackend, USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
 import { palette, radius, type } from './src/theme';
@@ -123,6 +123,11 @@ export default function App() {
   useEffect(() => {
     initAnalytics();
   }, []);
+
+  useEffect(() => {
+    if (!session?.userId) return;
+    registerSignupWithBackend(session.userId);
+  }, [session?.userId]);
 
   useEffect(() => {
     let cancelled = false;

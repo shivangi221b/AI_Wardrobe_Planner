@@ -5,8 +5,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
+from starlette.responses import Response
 
 from ..analytics_metrics import build_analytics_summary
+from ..db import register_signup_user_id
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -24,12 +26,14 @@ class PublicMetricsResponse(BaseModel):
 
 
 class AnalyticsSummaryResponse(BaseModel):
-    signups: int = Field(description="Supabase Auth users (all time), when configured.")
+    signups: int = Field(
+        description="max(Auth users, analytics_registered_users from POST /analytics/register, distinct wardrobe user_id)."
+    )
     active_users: int = Field(
         description="GA4 activeUsers over the rolling ``period_days`` window."
     )
     waitlist: int = Field(
-        description="Waitlist signups: CSV URL row count (WAITLIST_SHEET_CSV_URL) or Supabase table rows."
+        description="Formspree submission count, or CSV URL rows, or Supabase waitlist table (see env docs)."
     )
     page_views: int = Field(
         description="GA4 screenPageViews over the rolling ``period_days`` window."
@@ -49,6 +53,22 @@ class AnalyticsSummaryResponse(BaseModel):
         default=False,
         description="True when ``ANALYTICS_USE_DUMMY_METRICS`` is enabled (placeholder counts).",
     )
+
+
+class RegisterSignupBody(BaseModel):
+    user_id: str = Field(..., max_length=512, description="Same stable id the app uses for wardrobe API calls.")
+
+
+@router.post("/register", status_code=204)
+def register_signup(body: RegisterSignupBody) -> Response:
+    """
+    Call once after OAuth login (web/mobile). Idempotent upsert into
+    ``analytics_registered_users`` so ``signups`` counts users without garments.
+
+    Not protected by ``X-Analytics-Key`` (the app must call this anonymously).
+    """
+    register_signup_user_id(body.user_id)
+    return Response(status_code=204)
 
 
 def require_analytics_access(

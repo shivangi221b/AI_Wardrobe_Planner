@@ -108,7 +108,8 @@ jobs:
               SUPABASE_URL=SUPABASE_URL:latest,\
               SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest,\
               SERPAPI_KEY=SERPAPI_KEY:latest,\
-              HF_API_TOKEN=HF_API_TOKEN:latest" \
+              HF_API_TOKEN=HF_API_TOKEN:latest,\
+              GA4_PROPERTY_ID=GA4_PROPERTY_ID:latest" \
             --set-env-vars "\
               CORS_ORIGIN_REGEX=https://.*\.web\.app,\
               IMAGE_STORAGE_BACKEND=supabase,\
