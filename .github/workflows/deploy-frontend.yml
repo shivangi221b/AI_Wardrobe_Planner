@@ -53,7 +53,8 @@ jobs:
           # All web deployments (production and preview channels) use this same
           # URI so Google only needs one entry in its Authorized redirect URIs list.
           EXPO_PUBLIC_OAUTH_REDIRECT_URI: "https://${{ secrets.FIREBASE_PROJECT_ID }}.web.app"
-        run: npx expo export --platform web
+        # export:web = expo export to dist/ + copy static privacy/terms HTML for Firebase Hosting
+        run: npm run export:web
 
       # ── 5. Deploy to Firebase Hosting ────────────────────────────────────────
       # Uses the official Firebase action which reads firebase.json from the

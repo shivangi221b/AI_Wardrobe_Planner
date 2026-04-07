@@ -66,7 +66,7 @@ jobs:
           # the stable production URL instead. That page calls maybeCompleteAuthSession()
           # which posts the token back to this window via postMessage before closing.
           EXPO_PUBLIC_OAUTH_REDIRECT_URI: "https://${{ secrets.FIREBASE_PROJECT_ID }}.web.app"
-        run: npx expo export --platform web
+        run: npm run export:web
 
       # ── 5. Strip Cloud Run rewrites for preview deploy ────────────────────────
       # Firebase Hosting validates every rewrite rule at deploy time by calling
