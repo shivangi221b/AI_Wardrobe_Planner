@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from functools import lru_cache
@@ -15,7 +16,11 @@ from .models import (
     build_garment_tags,
 )
 
+logger = logging.getLogger(__name__)
+
 _local_wardrobes: dict[str, List[GarmentItem]] = {}
+# OAuth logins (no Supabase Auth): POST /analytics/register fills this in local dev.
+_local_signup_user_ids: set[str] = set()
 
 
 @lru_cache(maxsize=1)
@@ -38,6 +43,45 @@ def _use_local_store() -> bool:
 
 def _table_name() -> str:
     return os.getenv("SUPABASE_GARMENTS_TABLE", "garments")
+
+
+def _signup_registry_table() -> str:
+    return (os.getenv("SUPABASE_SIGNUPS_TABLE") or "analytics_registered_users").strip() or "analytics_registered_users"
+
+
+def register_signup_user_id(user_id: str) -> None:
+    """
+    Idempotent: record that *user_id* completed app login (OAuth) for metrics.
+
+    Requires table ``analytics_registered_users`` (see ``scripts/sql/analytics_registered_users.sql``).
+    """
+    uid = (user_id or "").strip()
+    if not uid or len(uid) > 512:
+        return
+    if _use_local_store():
+        _local_signup_user_ids.add(uid)
+        return
+    try:
+        get_supabase_client().table(_signup_registry_table()).upsert({"user_id": uid}).execute()
+    except Exception:
+        logger.exception("register_signup_user_id failed user_id=%r", uid[:80])
+
+
+def count_registered_signups() -> int:
+    """Rows in the signup registry table (or local set size)."""
+    if _use_local_store():
+        return len(_local_signup_user_ids)
+    try:
+        result = (
+            get_supabase_client()
+            .table(_signup_registry_table())
+            .select("user_id", count="exact", head=True)
+            .execute()
+        )
+        return int(result.count or 0)
+    except Exception:
+        logger.exception("count_registered_signups failed")
+        return 0
 
 
 def _parse_category(value: Any) -> GarmentCategory:
@@ -123,6 +167,30 @@ def _row_to_garment(row: dict[str, Any]) -> GarmentItem:
         created_at=_parse_datetime(row.get("created_at")),
         updated_at=_parse_datetime(row.get("updated_at")),
     )
+
+
+def count_distinct_wardrobe_user_ids() -> int:
+    """
+    Distinct ``user_id`` values in the garments table (or local store keys).
+
+    The mobile app signs in with Google/Apple via OAuth only — it does **not**
+    create Supabase Auth users — so this count is used as a practical signup
+    proxy for anyone who has saved at least one garment.
+    """
+    if _use_local_store():
+        return len(_local_wardrobes)
+    try:
+        result = (
+            get_supabase_client()
+            .table(_table_name())
+            .select("user_id")
+            .execute()
+        )
+        rows = result.data or []
+        return len({str(r.get("user_id")) for r in rows if r.get("user_id") is not None})
+    except Exception:
+        logger.exception("count_distinct_wardrobe_user_ids failed")
+        return 0
 
 
 def get_wardrobe(user_id: str) -> List[GarmentItem]:

@@ -203,6 +203,7 @@ SECRETS=(
   "SERPAPI_KEY"
   "HF_API_TOKEN"
   "ALLOWED_ORIGINS"
+  "GA4_PROPERTY_ID"
 )
 
 for SECRET in "${SECRETS[@]}"; do
@@ -245,6 +246,50 @@ if [[ "$SEED_SECRETS" =~ ^[Yy]$ ]]; then
       gcloud secrets versions add "ALLOWED_ORIGINS" --data-file=- 2>/dev/null || true
     echo "    Seeded: ALLOWED_ORIGINS → https://${FIREBASE_PROJECT_ID}.web.app"
   fi
+fi
+
+# ── 6b. Firebase Hosting → Cloud Run rewrites (firebase.json "run" blocks) ───
+# Without invoker access, browsers see: "Forbidden: Your client does not have
+# permission to get URL /... from this server" on https://PROJECT.web.app/...
+# See: https://firebase.google.com/docs/hosting/cloud-run (deploy Cloud Run with
+# unauthenticated access — same as gcloud run deploy --allow-unauthenticated).
+#
+# Prefer public Invoker (allUsers): matches Firebase docs and GitHub deploy-backend.
+# Do NOT use `gcloud beta services identity create --service=firebasehosting.googleapis.com`
+# — Google returns IAM_SERVICE_NOT_CONFIGURED_FOR_IDENTITIES for that API.
+#
+# Optional: if service-PROJECT@gcp-sa-firebasehosting.iam.gserviceaccount.com exists
+# in your project, you may also bind it; many projects only need allUsers.
+echo ""
+FIREBASE_HOSTING_SA="service-${PROJECT_NUMBER}@gcp-sa-firebasehosting.iam.gserviceaccount.com"
+echo ">>> [6b] Cloud Run Invoker for Firebase Hosting rewrites…"
+if gcloud run services describe "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" &>/dev/null; then
+  if gcloud run services add-iam-policy-binding "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" \
+    --member="allUsers" \
+    --role="roles/run.invoker" \
+    --quiet 2>/dev/null; then
+    echo "    OK — roles/run.invoker for allUsers on ${CLOUD_RUN_SERVICE} (public Hosting rewrites)."
+  else
+    echo "    ⚠  Could not add allUsers Invoker (org policy may block). Ask a project admin,"
+    echo "    or use Cloud Console → Cloud Run → ${CLOUD_RUN_SERVICE} → Security → Allow public access."
+  fi
+  if gcloud iam service-accounts describe "$FIREBASE_HOSTING_SA" --project="$GCP_PROJECT_ID" &>/dev/null; then
+    gcloud run services add-iam-policy-binding "$CLOUD_RUN_SERVICE" \
+      --region="$GCP_REGION" \
+      --member="serviceAccount:${FIREBASE_HOSTING_SA}" \
+      --role="roles/run.invoker" \
+      --quiet 2>/dev/null || true
+    echo "    Also granted roles/run.invoker to ${FIREBASE_HOSTING_SA} (optional)."
+  fi
+else
+  echo "    ⚠  Cloud Run service '${CLOUD_RUN_SERVICE}' not found in ${GCP_REGION} yet — skip IAM."
+  echo "    After deploy, ensure the service allows unauthenticated invoke, or run:"
+  echo ""
+  echo "    gcloud run services add-iam-policy-binding ${CLOUD_RUN_SERVICE} \\"
+  echo "      --region=${GCP_REGION} --project=${GCP_PROJECT_ID} \\"
+  echo "      --member=allUsers --role=roles/run.invoker"
+  echo ""
 fi
 
 # ── 7. Print GitHub Secrets summary ───────────────────────────────────────────
