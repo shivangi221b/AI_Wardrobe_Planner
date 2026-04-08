@@ -5,6 +5,7 @@ import logging
 import os
 from functools import lru_cache
 
+import httpx
 from huggingface_hub import InferenceClient
 from PIL import Image
 
@@ -33,6 +34,9 @@ def _hf_inference_client() -> InferenceClient:
             "Set HF_API_TOKEN (or HUGGINGFACE_HUB_TOKEN) in the backend env. "
             "Create a token at https://huggingface.co/settings/tokens"
         )
+    # Hub metadata calls (e.g. GET /api/models/...) use HUGGINGFACE_HUB_TOKEN from the
+    # environment; without it, Cloud Run's shared egress IP is rate-limited as anonymous.
+    os.environ.setdefault("HUGGINGFACE_HUB_TOKEN", token)
     # Use Inference Providers routing so we don't hardcode router URLs.
     return InferenceClient(provider="hf-inference", api_key=token)
 
@@ -76,7 +80,19 @@ def _generate_with_hf_flux(prompt: str, size: int) -> bytes:
         )
     except Exception as exc:
         logger.exception("ImageGen(HF) request failed")
-        raise RuntimeError("Image generation failed (Hugging Face). Check HF_API_TOKEN/quota and retry.") from exc
+        detail = "Image generation failed (Hugging Face). Check HF_API_TOKEN/quota and retry."
+        err = exc
+        while err is not None:
+            if isinstance(err, httpx.HTTPStatusError) and err.response.status_code == 429:
+                detail = (
+                    "Hugging Face returned HTTP 429 (rate limit). "
+                    "Cloud Run uses shared egress IPs that HF often throttles; "
+                    "ensure HF_API_TOKEN is set (and redeploy so HUGGINGFACE_HUB_TOKEN is populated for Hub API calls). "
+                    "If it persists, wait and retry, reduce garments per image, or use HF billing / higher limits."
+                )
+                break
+            err = err.__cause__
+        raise RuntimeError(detail) from exc
 
     raw = io.BytesIO()
     image.save(raw, format="PNG")
