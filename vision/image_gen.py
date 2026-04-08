@@ -148,8 +148,9 @@ def _generate_with_hf_flux(prompt: str, size: int) -> bytes:
                 if isinstance(err, httpx.HTTPStatusError) and err.response.status_code == 429:
                     detail = (
                         "Hugging Face returned HTTP 429 after retries (rate limit). "
-                        "Free-tier and shared Cloud Run IPs are often throttled; "
-                        "try again later, set VISION_MAX_GARMENT_IMAGES lower, increase HF_IMAGE_GEN_SPACING_SEC, "
+                        "Cloud Run uses shared egress IPs that HF often throttles; "
+                        "ensure HF_API_TOKEN is set and HUGGINGFACE_HUB_TOKEN is populated for Hub API calls. "
+                        "Try again later, set VISION_MAX_GARMENT_IMAGES lower, increase HF_IMAGE_GEN_SPACING_SEC, "
                         "or use Hugging Face paid / higher inference limits."
                     )
                     break
