@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, List, Optional
@@ -163,13 +164,26 @@ def extract_garments_from_image(image_bytes: bytes, mime_type: str = "image/jpeg
         items = []
     logger.info("Extractor candidate items=%d", len(items))
 
+    try:
+        max_garments = max(1, int(os.getenv("VISION_MAX_GARMENT_IMAGES", "6")))
+    except ValueError:
+        max_garments = 6
+    if len(items) > max_garments:
+        logger.warning("Extractor capping garment images %d -> %d (VISION_MAX_GARMENT_IMAGES)", len(items), max_garments)
+        items = items[:max_garments]
+
+    spacing = float(os.getenv("HF_IMAGE_GEN_SPACING_SEC", "1.5"))
+
     assets: List[ExtractedGarmentAsset] = []
-    for raw_item in items:
+    for idx, raw_item in enumerate(items):
         if not isinstance(raw_item, dict):
             continue
         item_type = str(raw_item.get("item_type") or "").strip()
         if not item_type:
             continue
+
+        if idx > 0 and spacing > 0:
+            time.sleep(spacing)
 
         product_prompt = _product_prompt_for_item(raw_item)
         image_out = generate_garment_image(product_prompt)
