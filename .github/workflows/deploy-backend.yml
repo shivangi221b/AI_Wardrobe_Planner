@@ -118,7 +118,9 @@ jobs:
               VERTEX_AI_MODEL=gemini-2.0-flash,\
               GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }},\
               GOOGLE_CLOUD_LOCATION=${{ env.GCP_REGION }},\
-              VERTEX_AI_VISION_MODEL=gemini-2.5-flash" \
+              VERTEX_AI_VISION_MODEL=gemini-2.5-flash,\
+              IMAGE_GEN_PROVIDER=vertex,\
+              IMAGEN_MODEL=imagen-4.0-fast-generate-001" \
             --quiet
 
       # ── 8. Print the deployed service URL ────────────────────────────────────

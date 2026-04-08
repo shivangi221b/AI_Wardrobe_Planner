@@ -3,15 +3,30 @@ from __future__ import annotations
 import io
 import logging
 import os
+import time
 from functools import lru_cache
+from pathlib import Path
 
 import httpx
+from google import genai
+from google.genai import types as genai_types
 from huggingface_hub import InferenceClient
 from PIL import Image
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover
+    load_dotenv = None
+
+# Same repo-root .env as backend/main.py — needed for `python -c "from vision.image_gen import …"`.
+if load_dotenv is not None:
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 logger = logging.getLogger(__name__)
 
 HF_FLUX_MODEL = "black-forest-labs/FLUX.1-schnell"
+# GA model: https://cloud.google.com/vertex-ai/generative-ai/docs/models/imagen/4-0-generate
+DEFAULT_IMAGEN_MODEL = "imagen-4.0-fast-generate-001"
 
 
 def _image_gen_provider() -> str:
@@ -23,6 +38,23 @@ def _target_size() -> int:
         return max(256, min(1024, int(os.getenv("GARMENT_ASSET_SIZE", "512"))))
     except Exception:
         return 512
+
+
+@lru_cache(maxsize=1)
+def _vertex_genai_client() -> genai.Client:
+    """Vertex-backed client for Imagen (same auth as Gemini in vision/extractor.py)."""
+    project = (os.getenv("GOOGLE_CLOUD_PROJECT") or "").strip()
+    if not project:
+        raise RuntimeError(
+            "Missing GOOGLE_CLOUD_PROJECT for Vertex Imagen. "
+            "Set it in the repo-root .env (local) or Cloud Run env (prod)."
+        )
+    location = (os.getenv("GOOGLE_CLOUD_LOCATION") or "us-central1").strip()
+    return genai.Client(vertexai=True, project=project, location=location)
+
+
+def _imagen_model_id() -> str:
+    return (os.getenv("IMAGEN_MODEL") or DEFAULT_IMAGEN_MODEL).strip()
 
 
 @lru_cache(maxsize=1)
@@ -39,6 +71,15 @@ def _hf_inference_client() -> InferenceClient:
     os.environ.setdefault("HUGGINGFACE_HUB_TOKEN", token)
     # Use Inference Providers routing so we don't hardcode router URLs.
     return InferenceClient(provider="hf-inference", api_key=token)
+
+
+def _http_status_from_exception(exc: BaseException) -> int | None:
+    err: BaseException | None = exc
+    while err is not None:
+        if isinstance(err, httpx.HTTPStatusError):
+            return err.response.status_code
+        err = err.__cause__
+    return None
 
 
 def _to_square_jpeg(image_bytes: bytes, size: int) -> bytes:
@@ -71,28 +112,52 @@ def _generate_with_hf_flux(prompt: str, size: int) -> bytes:
     prompt_text = prompt[:1000]
     logger.info("ImageGen(HF FLUX) start model=%s prompt_len=%d size=%d", HF_FLUX_MODEL, len(prompt_text), size)
 
-    try:
-        image = client.text_to_image(
-            prompt_text,
-            model=HF_FLUX_MODEL,
-            guidance_scale=0,
-            num_inference_steps=4,
-        )
-    except Exception as exc:
-        logger.exception("ImageGen(HF) request failed")
-        detail = "Image generation failed (Hugging Face). Check HF_API_TOKEN/quota and retry."
-        err = exc
-        while err is not None:
-            if isinstance(err, httpx.HTTPStatusError) and err.response.status_code == 429:
-                detail = (
-                    "Hugging Face returned HTTP 429 (rate limit). "
-                    "Cloud Run uses shared egress IPs that HF often throttles; "
-                    "ensure HF_API_TOKEN is set (and redeploy so HUGGINGFACE_HUB_TOKEN is populated for Hub API calls). "
-                    "If it persists, wait and retry, reduce garments per image, or use HF billing / higher limits."
+    max_retries = max(1, int(os.getenv("HF_IMAGE_GEN_MAX_RETRIES", "5")))
+    backoff = float(os.getenv("HF_IMAGE_GEN_BACKOFF_SEC", "2.0"))
+
+    image = None
+    last_exc: BaseException | None = None
+    for attempt in range(max_retries):
+        try:
+            image = client.text_to_image(
+                prompt_text,
+                model=HF_FLUX_MODEL,
+                guidance_scale=0,
+                num_inference_steps=4,
+            )
+            break
+        except Exception as exc:
+            last_exc = exc
+            code = _http_status_from_exception(exc)
+            if code in (429, 503) and attempt < max_retries - 1:
+                wait = backoff * (2**attempt)
+                logger.warning(
+                    "ImageGen(HF) HTTP %s attempt %d/%d — sleeping %.1fs then retry",
+                    code,
+                    attempt + 1,
+                    max_retries,
+                    wait,
                 )
-                break
-            err = err.__cause__
-        raise RuntimeError(detail) from exc
+                time.sleep(wait)
+                continue
+
+            logger.exception("ImageGen(HF) request failed")
+            detail = "Image generation failed (Hugging Face). Check HF_API_TOKEN/quota and retry."
+            err: BaseException | None = exc
+            while err is not None:
+                if isinstance(err, httpx.HTTPStatusError) and err.response.status_code == 429:
+                    detail = (
+                        "Hugging Face returned HTTP 429 after retries (rate limit). "
+                        "Free-tier and shared Cloud Run IPs are often throttled; "
+                        "try again later, set VISION_MAX_GARMENT_IMAGES lower, increase HF_IMAGE_GEN_SPACING_SEC, "
+                        "or use Hugging Face paid / higher inference limits."
+                    )
+                    break
+                err = err.__cause__
+            raise RuntimeError(detail) from exc
+
+    if image is None:
+        raise RuntimeError("Image generation failed (Hugging Face).") from last_exc
 
     raw = io.BytesIO()
     image.save(raw, format="PNG")
@@ -101,11 +166,98 @@ def _generate_with_hf_flux(prompt: str, size: int) -> bytes:
     return out_bytes
 
 
+def _is_transient_vertex_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    if "429" in msg or "503" in msg or "resource exhausted" in msg or "unavailable" in msg:
+        return True
+    return False
+
+
+def _generate_with_vertex_imagen(prompt: str, size: int) -> bytes:
+    """Generate using Imagen on Vertex AI (e.g. Imagen 4 Fast). Bills per image; see Vertex AI pricing."""
+    client = _vertex_genai_client()
+    model = _imagen_model_id()
+    prompt_text = prompt[:1000]
+    logger.info(
+        "ImageGen(Vertex Imagen) start model=%s prompt_len=%d target_jpeg=%d",
+        model,
+        len(prompt_text),
+        size,
+    )
+
+    max_retries = max(1, int(os.getenv("IMAGEN_GEN_MAX_RETRIES", os.getenv("HF_IMAGE_GEN_MAX_RETRIES", "5"))))
+    backoff = float(os.getenv("IMAGEN_GEN_BACKOFF_SEC", os.getenv("HF_IMAGE_GEN_BACKOFF_SEC", "2.0")))
+
+    config = genai_types.GenerateImagesConfig(
+        number_of_images=1,
+        aspect_ratio="1:1",
+        output_mime_type="image/png",
+        add_watermark=True,
+    )
+
+    response = None
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_images(
+                model=model,
+                prompt=prompt_text,
+                config=config,
+            )
+            break
+        except Exception as exc:
+            last_exc = exc
+            if _is_transient_vertex_error(exc) and attempt < max_retries - 1:
+                wait = backoff * (2**attempt)
+                logger.warning(
+                    "ImageGen(Vertex Imagen) transient error attempt %d/%d — sleeping %.1fs: %s",
+                    attempt + 1,
+                    max_retries,
+                    wait,
+                    exc,
+                )
+                time.sleep(wait)
+                continue
+            logger.exception("ImageGen(Vertex Imagen) request failed")
+            raise RuntimeError(
+                "Image generation failed (Vertex Imagen). "
+                "Check GOOGLE_CLOUD_PROJECT/location, Vertex AI API + billing, and IAM on the runtime service account."
+            ) from exc
+
+    if response is None:
+        raise RuntimeError("Image generation failed (Vertex Imagen).") from last_exc
+
+    if not response.generated_images:
+        raise RuntimeError(
+            "Vertex Imagen returned no images (empty response). "
+            "If this persists, the prompt may have been filtered; try a simpler product description."
+        )
+
+    first = response.generated_images[0]
+    if first.rai_filtered_reason:
+        logger.warning("Imagen RAI filter: %s", first.rai_filtered_reason)
+    img = first.image
+    if img is None or not img.image_bytes:
+        raise RuntimeError(
+            "Vertex Imagen returned no image bytes. "
+            "The output may have been safety-filtered; check logs for rai_filtered_reason."
+        )
+
+    out_bytes = _to_square_jpeg(img.image_bytes, size=size)
+    logger.info("ImageGen(Vertex Imagen) complete bytes=%d", len(out_bytes))
+    return out_bytes
+
+
 def generate_garment_image(prompt: str) -> bytes:
     """
     Generate a clean, product-style garment image from a text prompt.
 
-    Uses Hugging Face Inference API with FLUX.1-schnell by default (free tier available).
+    Providers (``IMAGE_GEN_PROVIDER``):
+
+    - ``hf`` — Hugging Face FLUX.1-schnell (requires ``HF_API_TOKEN``).
+    - ``vertex`` — Vertex AI Imagen (default model ``imagen-4.0-fast-generate-001``; requires
+      ``GOOGLE_CLOUD_PROJECT``, ADC or Cloud Run service account, Vertex AI API enabled).
+
     The prompt should already be a full product-photo description (e.g. from the vision extractor).
 
     Returns JPEG bytes (square, white background) ready for storage upload.
@@ -122,7 +274,10 @@ def generate_garment_image(prompt: str) -> bytes:
     if provider == "hf":
         return _generate_with_hf_flux(text, size=size)
 
+    if provider in ("vertex", "imagen"):
+        return _generate_with_vertex_imagen(text, size=size)
+
     raise RuntimeError(
         f"Unknown IMAGE_GEN_PROVIDER={provider}. "
-        "Set IMAGE_GEN_PROVIDER=hf and HF_API_TOKEN for FLUX.1-schnell (recommended)."
+        "Use hf (Hugging Face + HF_API_TOKEN) or vertex (Vertex Imagen + GOOGLE_CLOUD_PROJECT)."
     )
