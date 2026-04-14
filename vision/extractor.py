@@ -105,17 +105,27 @@ def _build_prompt() -> str:
         '      "material": "fabric if visible e.g. cotton, denim, silk, leather, or null if not visible",\n'
         '      "fit_style": "fit or style descriptors e.g. oversized, slim fit, cropped, relaxed, fitted, or null",\n'
         '      "category": "top|bottom|dress|outerwear|shoes|accessory",\n'
-        '      "sub_category": "short text",\n'
+        '      "sub_category": "short text — use specific names from the lists below",\n'
         '      "formality": "casual|smart_casual|business|formal",\n'
-        '      "seasonality": "hot|mild|cold|all_season"\n'
+        '      "seasonality": "hot|mild|cold|all_season",\n'
+        '      "brand": "brand name if visible on label/logo e.g. Zara, H&M, Urban Revivo, Uniqlo, or null"\n'
         "    }\n"
         "  ]\n"
         "}\n"
+        "Sub-category reference lists (use these exact values when applicable):\n"
+        "  Tops: t-shirt, shirt, blouse, sweater, cardigan, hoodie, sweatshirt, blazer, vest,\n"
+        "        halter_neck, crop_top, tank_top, bodysuit, turtleneck, polo, henley\n"
+        "  Bottoms: jeans, trousers, pants, skirt, shorts, leggings, sweatpants, cargo pants,\n"
+        "           dress pants, wide-leg pants, culottes\n"
+        "  Other: dress, jumpsuit, coat, jacket, parka, cardigan, sneakers, boots, heels,\n"
+        "         loafers, sandals, bag, belt, scarf, hat, sunglasses\n"
         "Rules:\n"
         "- Return one entry per garment item you can see.\n"
         "- If uncertain, still choose the closest valid category.\n"
         "- item_type must be a concrete garment name (e.g. crewneck sweater, high-waist trousers).\n"
         "- When no pattern is visible, set pattern to \"solid\" (do not use values like \"none\" or \"no pattern\").\n"
+        "- Recognized brands include (non-exhaustive): Zara, H&M, Urban Revivo, Uniqlo, Mango, SHEIN,\n"
+        "  Abercrombie & Fitch, Levi's, Ralph Lauren, Tommy Hilfiger, Nike, Adidas, Lululemon.\n"
         "- Output JSON only, no markdown."
     )
 

@@ -30,6 +30,12 @@ class GarmentSeasonality(str, Enum):
     ALL_SEASON = "all_season"
 
 
+class GarmentGender(str, Enum):
+    MEN = "men"
+    WOMEN = "women"
+    UNISEX = "unisex"
+
+
 def build_garment_tags(
     category: GarmentCategory,
     formality: Optional[GarmentFormality] = None,
@@ -80,6 +86,13 @@ class GarmentItem(BaseModel):
     material: Optional[str] = None
     fit_notes: Optional[str] = None
 
+    # Gender target for this garment (None = unspecified, safe for all users).
+    gender: Optional[GarmentGender] = None
+
+    # Recommendation usage tracking.
+    times_recommended: int = 0
+    hidden_from_recommendations: bool = False
+
     # Opaque embedding identifier; actual vector stored in a separate service/index.
     embedding_id: Optional[str] = None
 
@@ -129,6 +142,27 @@ class MediaIngestionJob(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Body measurements
+# ---------------------------------------------------------------------------
+
+
+class BodyMeasurements(BaseModel):
+    """
+    Optional user body measurements used to score fit when making outfit suggestions.
+    All fields are optional; absent measurements are simply ignored by the engine.
+    """
+
+    user_id: str
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    chest_cm: Optional[float] = None
+    waist_cm: Optional[float] = None
+    hips_cm: Optional[float] = None
+    inseam_cm: Optional[float] = None
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # Weekly outfit recommendation models
 # ---------------------------------------------------------------------------
 
@@ -163,6 +197,11 @@ class WeekRecommendationRequest(BaseModel):
     user_id: str
     events: List[WeekEvent]
 
+    # Optional user context forwarded to the recommendation engine.
+    user_gender: Optional[str] = None
+    """Gender identity of the user (``"male"``, ``"female"``, or ``"other"``).
+    When provided, garments tagged for the opposite binary gender are excluded."""
+
 
 class DayOutfitSuggestion(BaseModel):
     """Structured outfit recommendation for a single day."""
@@ -181,4 +220,3 @@ class WeekRecommendationResponse(BaseModel):
 
     user_id: str
     recommendations: List[DayOutfitSuggestion]
-

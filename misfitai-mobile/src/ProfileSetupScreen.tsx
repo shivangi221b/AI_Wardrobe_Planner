@@ -1,8 +1,18 @@
 import React, { useMemo, useState } from 'react';
-import { Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { palette, radius, type } from './theme';
 import type { UserProfile } from './AuthScreen';
+import type { BodyMeasurements } from './types';
 
 function isValidBirthday(value: string): boolean {
   const v = value.trim();
@@ -11,38 +21,68 @@ function isValidBirthday(value: string): boolean {
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
   if (m < 1 || m > 12) return false;
   if (d < 1 || d > 31) return false;
-  // Basic calendar sanity (avoid timezone quirks by using UTC)
   const dt = new Date(Date.UTC(y, m - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
+
+function parsePositiveFloat(value: string): number | null {
+  const v = value.trim();
+  if (!v) return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+type MeasurementFields = Omit<BodyMeasurements, 'userId' | 'updatedAt'>;
 
 export function ProfileSetupScreen({
   initialProfile,
   onDone,
 }: {
   initialProfile?: UserProfile;
-  onDone: (profilePatch: Pick<UserProfile, 'gender' | 'birthday'>) => void;
+  onDone: (profilePatch: Pick<UserProfile, 'gender' | 'birthday'>, measurements: MeasurementFields) => void;
 }) {
   const [gender, setGender] = useState<UserProfile['gender']>(initialProfile?.gender ?? null);
   const [birthday, setBirthday] = useState<string>(initialProfile?.birthday ?? '');
   const [birthdayTouched, setBirthdayTouched] = useState(false);
 
+  const [showMeasurements, setShowMeasurements] = useState(false);
+  const [heightCm, setHeightCm] = useState('');
+  const [weightKg, setWeightKg] = useState('');
+  const [chestCm, setChestCm] = useState('');
+  const [waistCm, setWaistCm] = useState('');
+  const [hipsCm, setHipsCm] = useState('');
+  const [inseamCm, setInseamCm] = useState('');
+
   const birthdayError = useMemo(() => {
     const value = birthday.trim();
     if (!birthdayTouched) return null;
-    if (!value) return null; // optional
+    if (!value) return null;
     return isValidBirthday(value) ? null : 'Use YYYY-MM-DD (e.g., 2001-04-07).';
   }, [birthday, birthdayTouched]);
+
+  function buildMeasurements(): MeasurementFields {
+    return {
+      heightCm: parsePositiveFloat(heightCm),
+      weightKg: parsePositiveFloat(weightKg),
+      chestCm: parsePositiveFloat(chestCm),
+      waistCm: parsePositiveFloat(waistCm),
+      hipsCm: parsePositiveFloat(hipsCm),
+      inseamCm: parsePositiveFloat(inseamCm),
+    };
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
       <AtmosphereBackground />
-      <View style={styles.container}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text style={styles.brand}>misfitAI</Text>
         <Text style={styles.title}>A quick question</Text>
         <Text style={styles.subtitle}>
-          We no longer pull birthday or gender from Google. Add them here (optional) so we can personalize your
-          experience.
+          We no longer pull birthday or gender from Google. Add them here (optional) so we can
+          personalize your experience.
         </Text>
 
         <View style={styles.card}>
@@ -60,7 +100,9 @@ export function ProfileSetupScreen({
                   onPress={() => setGender(active ? null : g.key)}
                   style={[styles.chip, active && styles.chipActive]}
                 >
-                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{g.label}</Text>
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                    {g.label}
+                  </Text>
                 </Pressable>
               );
             })}
@@ -79,29 +121,73 @@ export function ProfileSetupScreen({
             onBlur={() => setBirthdayTouched(true)}
           />
           {birthdayError ? <Text style={styles.errorText}>{birthdayError}</Text> : null}
+        </View>
 
-          <View style={styles.actions}>
-            <Pressable
-              onPress={() => onDone({ gender: null, birthday: null })}
-              style={[styles.button, styles.buttonGhost]}
-            >
-              <Text style={[styles.buttonText, styles.buttonGhostText]}>Skip</Text>
-            </Pressable>
-            <Pressable
-              onPress={() =>
-                onDone({
+        {/* Body measurements — collapsible section */}
+        <Pressable
+          style={styles.measurementsToggle}
+          onPress={() => setShowMeasurements((v) => !v)}
+        >
+          <Text style={styles.measurementsToggleText}>
+            {showMeasurements ? '▲ Hide' : '▼ Add'} body measurements (optional)
+          </Text>
+        </Pressable>
+
+        {showMeasurements ? (
+          <View style={styles.card}>
+            <Text style={styles.measurementsHint}>
+              Used to suggest better-fitting items. All fields are optional and stored
+              securely.
+            </Text>
+            {(
+              [
+                { label: 'Height (cm)', value: heightCm, onChange: setHeightCm },
+                { label: 'Weight (kg)', value: weightKg, onChange: setWeightKg },
+                { label: 'Chest / Bust (cm)', value: chestCm, onChange: setChestCm },
+                { label: 'Waist (cm)', value: waistCm, onChange: setWaistCm },
+                { label: 'Hips (cm)', value: hipsCm, onChange: setHipsCm },
+                { label: 'Inseam (cm)', value: inseamCm, onChange: setInseamCm },
+              ] as const
+            ).map(({ label, value, onChange }) => (
+              <View key={label} style={styles.measurementRow}>
+                <Text style={styles.measurementLabel}>{label}</Text>
+                <TextInput
+                  value={value}
+                  onChangeText={onChange}
+                  placeholder="—"
+                  placeholderTextColor={palette.muted}
+                  keyboardType="decimal-pad"
+                  style={styles.measurementInput}
+                />
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        <View style={styles.actions}>
+          <Pressable
+            onPress={() => onDone({ gender: null, birthday: null }, buildMeasurements())}
+            style={[styles.button, styles.buttonGhost]}
+          >
+            <Text style={[styles.buttonText, styles.buttonGhostText]}>Skip</Text>
+          </Pressable>
+          <Pressable
+            onPress={() =>
+              onDone(
+                {
                   gender: gender ?? null,
                   birthday: birthday.trim() ? birthday.trim() : null,
-                })
-              }
-              style={[styles.button, styles.buttonPrimary]}
-              disabled={Boolean(birthdayError)}
-            >
-              <Text style={[styles.buttonText, styles.buttonPrimaryText]}>Continue</Text>
-            </Pressable>
-          </View>
+                },
+                buildMeasurements()
+              )
+            }
+            style={[styles.button, styles.buttonPrimary]}
+            disabled={Boolean(birthdayError)}
+          >
+            <Text style={[styles.buttonText, styles.buttonPrimaryText]}>Continue</Text>
+          </Pressable>
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -112,9 +198,9 @@ const styles = StyleSheet.create({
     backgroundColor: palette.bg,
   },
   container: {
-    flex: 1,
     paddingHorizontal: 18,
     paddingTop: 48,
+    paddingBottom: 32,
   },
   brand: {
     fontSize: 18,
@@ -141,6 +227,7 @@ const styles = StyleSheet.create({
     borderColor: palette.lineStrong,
     backgroundColor: palette.panel,
     padding: 16,
+    marginBottom: 12,
   },
   sectionTitle: {
     fontSize: 12,
@@ -195,8 +282,51 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: type.body,
   },
+  measurementsToggle: {
+    paddingVertical: 10,
+    marginBottom: 4,
+  },
+  measurementsToggleText: {
+    fontSize: 13,
+    color: palette.accent,
+    fontFamily: type.bodyDemi,
+  },
+  measurementsHint: {
+    fontSize: 12,
+    color: palette.muted,
+    fontFamily: type.body,
+    lineHeight: 18,
+    marginBottom: 14,
+  },
+  measurementRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.line,
+  },
+  measurementLabel: {
+    fontSize: 13,
+    color: palette.inkSoft,
+    fontFamily: type.body,
+    flex: 1,
+  },
+  measurementInput: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    backgroundColor: palette.panelStrong,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 13,
+    color: palette.ink,
+    fontFamily: type.body,
+    width: 90,
+    textAlign: 'right',
+  },
   actions: {
-    marginTop: 18,
+    marginTop: 8,
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 10,
@@ -228,4 +358,3 @@ const styles = StyleSheet.create({
     color: palette.panelStrong,
   },
 });
-

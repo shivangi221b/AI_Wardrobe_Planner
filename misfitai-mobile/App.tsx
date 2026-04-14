@@ -37,6 +37,36 @@ function deriveUserIdFromProfile(profile?: UserProfile): string {
   return `demo-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function ProfileSetupScreenWithMeasurements({
+  session,
+  setSession,
+}: {
+  session: Session;
+  setSession: React.Dispatch<React.SetStateAction<Session | null>>;
+}) {
+  const { updateMeasurements } = useAppState();
+  return (
+    <ProfileSetupScreen
+      initialProfile={session.profile}
+      onDone={(profilePatch, measurements) => {
+        const next: Session = {
+          ...session,
+          profile: { ...(session.profile ?? {}), ...profilePatch },
+          profileCompleted: true,
+        };
+        setSession(next);
+        AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+        const hasMeasurements = Object.values(measurements).some((v) => v != null);
+        if (hasMeasurements) {
+          updateMeasurements(measurements).catch(() => {
+            /* non-blocking */
+          });
+        }
+      }}
+    />
+  );
+}
+
 function AppContent({
   session,
   onSignOut,
@@ -192,23 +222,25 @@ export default function App() {
 
   if (session.mode === 'signup' && session.profileCompleted !== true) {
     return (
-      <ProfileSetupScreen
-        initialProfile={session.profile}
-        onDone={(profilePatch) => {
-          const next: Session = {
-            ...session,
-            profile: { ...(session.profile ?? {}), ...profilePatch },
-            profileCompleted: true,
-          };
-          setSession(next);
-          AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
-        }}
-      />
+      <AppStateProvider
+        userId={session.userId}
+        userGender={session.profile?.gender ?? null}
+        googleAccessToken={null}
+      >
+        <ProfileSetupScreenWithMeasurements
+          session={session}
+          setSession={setSession}
+        />
+      </AppStateProvider>
     );
   }
 
   return (
-    <AppStateProvider userId={session.userId} googleAccessToken={googleAccessToken}>
+    <AppStateProvider
+      userId={session.userId}
+      userGender={session.profile?.gender ?? null}
+      googleAccessToken={googleAccessToken}
+    >
       <AppContent session={session} onSignOut={handleSignOut} />
     </AppStateProvider>
   );
