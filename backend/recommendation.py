@@ -88,7 +88,7 @@ _FALLBACK_FORMALITY_CHAIN: list[frozenset[str]] = [
 
 # ---------------------------------------------------------------------------
 # Sub-categories that are always excluded for specific event types.
-# Checked against item.sub_category (case-insensitive).
+# Checked against item.sub_category after normalization.
 # ---------------------------------------------------------------------------
 
 _EXCLUDED_SUBCATEGORIES_BY_EVENT: dict[str, frozenset[str]] = {
@@ -96,6 +96,17 @@ _EXCLUDED_SUBCATEGORIES_BY_EVENT: dict[str, frozenset[str]] = {
         {"tank_top", "crop_top", "graphic_tee", "halter_neck", "bodysuit", "hoodie"}
     ),
 }
+
+
+def _normalize_sub_category(value: str) -> str:
+    """Normalize a sub_category string for comparison.
+
+    Converts user-entered free-form values (e.g. ``"Tank top"``, ``"Crop-top"``)
+    to the snake_case form used in the blocklists and allowlists
+    (e.g. ``"tank_top"``, ``"crop_top"``).
+    """
+    import re
+    return re.sub(r"[\s\-]+", "_", value.strip().lower())
 
 # ---------------------------------------------------------------------------
 # Size-band mapping — used to prefer items that are likely to fit.
@@ -163,27 +174,29 @@ def _size_matches(item: GarmentItem, user_size_label: str) -> bool:
 
 
 def _is_top(item: GarmentItem) -> bool:
+    norm_sub = _normalize_sub_category(item.sub_category) if item.sub_category else None
     cat_matches = (
         item.category.value in _TOP_CATEGORIES
-        or (item.sub_category is not None and item.sub_category.lower() in _TOP_CATEGORIES)
+        or (norm_sub is not None and norm_sub in _TOP_CATEGORIES)
     )
     if not cat_matches:
         return False
     # Reject items whose sub_category belongs exclusively to the bottom slot.
-    if item.sub_category and item.sub_category.lower() in _BOTTOM_SUBCATEGORIES:
+    if norm_sub and norm_sub in _BOTTOM_SUBCATEGORIES:
         return False
     return True
 
 
 def _is_bottom(item: GarmentItem) -> bool:
+    norm_sub = _normalize_sub_category(item.sub_category) if item.sub_category else None
     cat_matches = (
         item.category.value in _BOTTOM_CATEGORIES
-        or (item.sub_category is not None and item.sub_category.lower() in _BOTTOM_CATEGORIES)
+        or (norm_sub is not None and norm_sub in _BOTTOM_CATEGORIES)
     )
     if not cat_matches:
         return False
     # Reject items whose sub_category belongs exclusively to the top slot.
-    if item.sub_category and item.sub_category.lower() in _TOP_SUBCATEGORIES:
+    if norm_sub and norm_sub in _TOP_SUBCATEGORIES:
         return False
     return True
 
@@ -193,7 +206,7 @@ def _is_excluded_for_event(item: GarmentItem, event_type: str) -> bool:
     blocklist = _EXCLUDED_SUBCATEGORIES_BY_EVENT.get(event_type)
     if not blocklist:
         return False
-    if item.sub_category and item.sub_category.lower() in blocklist:
+    if item.sub_category and _normalize_sub_category(item.sub_category) in blocklist:
         return True
     return False
 
@@ -216,8 +229,12 @@ def _pick_garment(
         2. Unused, event-appropriate (no size match required)
         3. Already-used, size-matched, event-appropriate
         4. Already-used, event-appropriate
-      After exhausting all tiers:
-        5. None — no appropriate garment found
+      After exhausting all explicit tiers:
+        5. Garments with formality=None (untagged) — treated as last resort
+           so existing vision-ingested items without a formality value are
+           never silently dropped.
+      Final fallback:
+        6. None — no appropriate garment found
     """
     candidates = [
         g for g in pool
@@ -232,31 +249,35 @@ def _pick_garment(
     def formality_matches(g: GarmentItem, tier: frozenset[str]) -> bool:
         return g.formality is not None and g.formality.value in tier
 
-    for tier in formality_chain:
-        tier_candidates = [g for g in candidates if formality_matches(g, tier)]
-        if not tier_candidates:
-            continue
-
-        unused = [g for g in tier_candidates if g.id not in used_ids]
-        used = [g for g in tier_candidates if g.id in used_ids]
-
+    def _pick_from(subset: list[GarmentItem]) -> Optional[GarmentItem]:
+        """Return the best item from *subset* applying size preference."""
+        if not subset:
+            return None
+        unused = [g for g in subset if g.id not in used_ids]
+        in_use = [g for g in subset if g.id in used_ids]
         if user_size_label:
             unused_sized = [g for g in unused if _size_matches(g, user_size_label)]
             if unused_sized:
                 return unused_sized[0]
-
         if unused:
             return unused[0]
-
         if user_size_label:
-            used_sized = [g for g in used if _size_matches(g, user_size_label)]
+            used_sized = [g for g in in_use if _size_matches(g, user_size_label)]
             if used_sized:
                 return used_sized[0]
+        return in_use[0] if in_use else None
 
-        if used:
-            return used[0]
+    for tier in formality_chain:
+        tier_candidates = [g for g in candidates if formality_matches(g, tier)]
+        result = _pick_from(tier_candidates)
+        if result is not None:
+            return result
 
-    return None
+    # Fallback: items whose formality was never set (e.g. vision-ingested with
+    # no recognized formality label).  These are treated as context-neutral
+    # rather than excluded outright.
+    untagged = [g for g in candidates if g.formality is None]
+    return _pick_from(untagged)
 
 
 def _display_name(item: Optional[GarmentItem]) -> Optional[str]:

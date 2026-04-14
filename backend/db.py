@@ -374,6 +374,10 @@ def add_garments(user_id: str, items: List[GarmentItem]) -> None:
 def increment_recommendation_counts(garment_ids: List[str], user_id: str) -> None:
     """Increment ``times_recommended`` for each garment in *garment_ids*.
 
+    *garment_ids* may contain duplicate entries (the same garment recommended
+    on multiple days).  Each occurrence counts as one additional recommendation,
+    so a ``Counter`` is used to sum occurrences before writing.
+
     In local mode this mutates the in-memory store directly.
     In Supabase mode each increment is a single UPDATE (no RPC required).
     Failures are logged but never re-raised — recommendation generation must
@@ -381,21 +385,23 @@ def increment_recommendation_counts(garment_ids: List[str], user_id: str) -> Non
     """
     if not garment_ids:
         return
+    from collections import Counter
+    counts = Counter(garment_ids)  # {garment_id: occurrences}
+
     if _use_local_store():
         wardrobe = _local_wardrobes.get(user_id, [])
-        id_set = set(garment_ids)
         _local_wardrobes[user_id] = [
-            g.model_copy(update={"times_recommended": g.times_recommended + 1})
-            if g.id in id_set else g
+            g.model_copy(update={"times_recommended": g.times_recommended + counts[g.id]})
+            if g.id in counts else g
             for g in wardrobe
         ]
         return
     client = get_supabase_client()
-    for gid in garment_ids:
+    for gid, delta in counts.items():
         try:
             client.rpc(
                 "increment_garment_recommended",
-                {"garment_id": gid},
+                {"garment_id": gid, "delta": delta},
             ).execute()
         except Exception:
             # RPC may not exist yet — fall back to a read-modify-write.
@@ -410,8 +416,8 @@ def increment_recommendation_counts(garment_ids: List[str], user_id: str) -> Non
                 )
                 current = int((result.data or {}).get("times_recommended") or 0)
                 client.table(_table_name()).update(
-                    {"times_recommended": current + 1}
-                ).eq("id", gid).execute()
+                    {"times_recommended": current + delta}
+                ).eq("id", gid).eq("user_id", user_id).execute()
             except Exception:
                 logger.exception("Failed to increment times_recommended for garment %s", gid)
 

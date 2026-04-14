@@ -166,7 +166,16 @@ export function ProfileSetupScreen({
 
         <View style={styles.actions}>
           <Pressable
-            onPress={() => onDone({ gender: null, birthday: null }, buildMeasurements())}
+            onPress={() =>
+              onDone({ gender: null, birthday: null }, {
+                heightCm: null,
+                weightKg: null,
+                chestCm: null,
+                waistCm: null,
+                hipsCm: null,
+                inseamCm: null,
+              })
+            }
             style={[styles.button, styles.buttonGhost]}
           >
             <Text style={[styles.buttonText, styles.buttonGhostText]}>Skip</Text>
