@@ -1,0 +1,67 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    name: Backend Tests (pytest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests with coverage
+        run: pytest backend/tests/ --cov=backend --cov-report=xml --cov-report=term-missing -v
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          flags: backend
+        continue-on-error: true
+
+  frontend-tests:
+    name: Frontend Tests (Jest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: misfitai-mobile/package-lock.json
+
+      - name: Install dependencies
+        working-directory: misfitai-mobile
+        run: npm ci --legacy-peer-deps
+
+      - name: Run tests with coverage
+        working-directory: misfitai-mobile
+        run: npx jest --ci --coverage --forceExit
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          file: misfitai-mobile/coverage/lcov.info
+          flags: frontend
+        continue-on-error: true
