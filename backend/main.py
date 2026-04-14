@@ -21,10 +21,12 @@ from starlette.concurrency import run_in_threadpool
 
 from vision.extractor import ExtractedGarmentAsset, extract_garments_from_image
 
-from .db import insert_garment
+from .db import get_measurements, insert_garment, set_garment_hidden, upsert_measurements
 from .models import (
+    BodyMeasurements,
     GarmentCategory,
     GarmentFormality,
+    GarmentGender,
     GarmentItem,
     GarmentSeasonality,
     build_garment_tags,
@@ -101,6 +103,7 @@ class AddGarmentRequest(BaseModel):
     formality: Optional[GarmentFormality] = None
     seasonality: Optional[GarmentSeasonality] = None
     primary_image_url: HttpUrl
+    gender: Optional[GarmentGender] = None
 
 
 class SearchGarmentRequest(BaseModel):
@@ -260,6 +263,7 @@ def add_wardrobe_item(user_id: str, request: AddGarmentRequest) -> GarmentItem:
         color_primary=request.color,
         formality=formality,
         seasonality=seasonality,
+        gender=request.gender,
         tags=tags,
         created_at=now,
         updated_at=now,
@@ -504,3 +508,58 @@ async def extract_wardrobe_from_image(
 
     logger.info("Vision pipeline persisted user_id=%s inserted_items=%d", user_id, len(garments))
     return garments
+
+
+# ---------------------------------------------------------------------------
+# Body measurements endpoints
+# ---------------------------------------------------------------------------
+
+
+class MeasurementsBody(BaseModel):
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    chest_cm: Optional[float] = None
+    waist_cm: Optional[float] = None
+    hips_cm: Optional[float] = None
+    inseam_cm: Optional[float] = None
+
+
+@app.get("/users/{user_id}/measurements", response_model=Optional[BodyMeasurements])
+def get_user_measurements(user_id: str) -> Optional[BodyMeasurements]:
+    """Return saved body measurements for the user, or null if none exist."""
+    return get_measurements(user_id)
+
+
+@app.put("/users/{user_id}/measurements", response_model=BodyMeasurements)
+def put_user_measurements(user_id: str, body: MeasurementsBody) -> BodyMeasurements:
+    """Create or replace body measurements for the user."""
+    now = datetime.utcnow()
+    measurements = BodyMeasurements(
+        user_id=user_id,
+        height_cm=body.height_cm,
+        weight_kg=body.weight_kg,
+        chest_cm=body.chest_cm,
+        waist_cm=body.waist_cm,
+        hips_cm=body.hips_cm,
+        inseam_cm=body.inseam_cm,
+        updated_at=now,
+    )
+    return upsert_measurements(measurements)
+
+
+# ---------------------------------------------------------------------------
+# Hide/unhide garment endpoints
+# ---------------------------------------------------------------------------
+
+
+class HideGarmentBody(BaseModel):
+    hidden: bool
+
+
+@app.patch("/wardrobe/{user_id}/{garment_id}/hide", response_model=GarmentItem)
+def patch_garment_hidden(user_id: str, garment_id: str, body: HideGarmentBody) -> GarmentItem:
+    """Toggle whether a garment appears in outfit recommendations."""
+    updated = set_garment_hidden(garment_id, user_id, body.hidden)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Garment {garment_id} not found.")
+    return updated

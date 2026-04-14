@@ -9,8 +9,10 @@ from typing import Any, List, Optional
 from supabase import Client, create_client
 
 from .models import (
+    BodyMeasurements,
     GarmentCategory,
     GarmentFormality,
+    GarmentGender,
     GarmentItem,
     GarmentSeasonality,
     build_garment_tags,
@@ -19,6 +21,7 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 _local_wardrobes: dict[str, List[GarmentItem]] = {}
+_local_measurements: dict[str, BodyMeasurements] = {}
 # OAuth logins (no Supabase Auth): POST /analytics/register fills this in local dev.
 _local_signup_user_ids: set[str] = set()
 
@@ -43,6 +46,10 @@ def _use_local_store() -> bool:
 
 def _table_name() -> str:
     return os.getenv("SUPABASE_GARMENTS_TABLE", "garments")
+
+
+def _measurements_table_name() -> str:
+    return os.getenv("SUPABASE_MEASUREMENTS_TABLE", "user_measurements")
 
 
 def _signup_registry_table() -> str:
@@ -109,6 +116,15 @@ def _parse_seasonality(value: Any) -> Optional[GarmentSeasonality]:
         return None
 
 
+def _parse_gender(value: Any) -> Optional[GarmentGender]:
+    if value in (None, ""):
+        return None
+    try:
+        return GarmentGender(str(value))
+    except Exception:
+        return None
+
+
 def _parse_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
@@ -139,6 +155,7 @@ def _row_to_garment(row: dict[str, Any]) -> GarmentItem:
     category = _parse_category(row.get("category"))
     formality = _parse_formality(row.get("formality"))
     seasonality = _parse_seasonality(row.get("seasonality"))
+    gender = _parse_gender(row.get("gender"))
 
     raw_tags = row.get("tags")
     if isinstance(raw_tags, list):
@@ -162,6 +179,9 @@ def _row_to_garment(row: dict[str, Any]) -> GarmentItem:
         size=row.get("size"),
         material=row.get("material"),
         fit_notes=row.get("fit_notes"),
+        gender=gender,
+        times_recommended=int(row.get("times_recommended") or 0),
+        hidden_from_recommendations=bool(row.get("hidden_from_recommendations") or False),
         embedding_id=row.get("embedding_id"),
         tags=tags,
         created_at=_parse_datetime(row.get("created_at")),
@@ -326,7 +346,7 @@ def set_wardrobe(user_id: str, items: List[GarmentItem]) -> None:
     deletes all existing rows then re-inserts, so use sparingly in production.
     """
     if _use_local_store():
-        _local_wardrobes[user_id] = [ _ensure_garment_tags(g) for g in items ]
+        _local_wardrobes[user_id] = [_ensure_garment_tags(g) for g in items]
         return
 
     client = get_supabase_client()
@@ -349,3 +369,156 @@ def add_garments(user_id: str, items: List[GarmentItem]) -> None:
     for garment in items:
         enforced = garment.model_copy(update={"user_id": user_id})
         insert_garment(enforced)
+
+
+def increment_recommendation_counts(garment_ids: List[str], user_id: str) -> None:
+    """Increment ``times_recommended`` for each garment in *garment_ids*.
+
+    *garment_ids* may contain duplicate entries (the same garment recommended
+    on multiple days).  Each occurrence counts as one additional recommendation,
+    so a ``Counter`` is used to sum occurrences before writing.
+
+    In local mode this mutates the in-memory store directly.
+    In Supabase mode each increment is a single UPDATE (no RPC required).
+    Failures are logged but never re-raised — recommendation generation must
+    not fail because of a counter update.
+    """
+    if not garment_ids:
+        return
+    from collections import Counter
+    counts = Counter(garment_ids)  # {garment_id: occurrences}
+
+    if _use_local_store():
+        wardrobe = _local_wardrobes.get(user_id, [])
+        _local_wardrobes[user_id] = [
+            g.model_copy(update={"times_recommended": g.times_recommended + counts[g.id]})
+            if g.id in counts else g
+            for g in wardrobe
+        ]
+        return
+    client = get_supabase_client()
+    for gid, delta in counts.items():
+        try:
+            client.rpc(
+                "increment_garment_recommended",
+                {"garment_id": gid, "delta": delta},
+            ).execute()
+        except Exception:
+            # RPC may not exist yet — fall back to a read-modify-write.
+            try:
+                result = (
+                    client.table(_table_name())
+                    .select("times_recommended")
+                    .eq("id", gid)
+                    .eq("user_id", user_id)
+                    .maybe_single()
+                    .execute()
+                )
+                current = int((result.data or {}).get("times_recommended") or 0)
+                client.table(_table_name()).update(
+                    {"times_recommended": current + delta}
+                ).eq("id", gid).eq("user_id", user_id).execute()
+            except Exception:
+                logger.exception("Failed to increment times_recommended for garment %s", gid)
+
+
+def set_garment_hidden(garment_id: str, user_id: str, hidden: bool) -> Optional[GarmentItem]:
+    """Toggle ``hidden_from_recommendations`` for a single garment.
+
+    Returns the updated garment, or ``None`` if not found.
+    """
+    now = datetime.utcnow()
+    if _use_local_store():
+        wardrobe = _local_wardrobes.get(user_id, [])
+        updated: Optional[GarmentItem] = None
+        new_wardrobe = []
+        for g in wardrobe:
+            if g.id == garment_id:
+                updated = g.model_copy(
+                    update={"hidden_from_recommendations": hidden, "updated_at": now}
+                )
+                new_wardrobe.append(updated)
+            else:
+                new_wardrobe.append(g)
+        _local_wardrobes[user_id] = new_wardrobe
+        return updated
+    try:
+        result = (
+            get_supabase_client()
+            .table(_table_name())
+            .update({"hidden_from_recommendations": hidden, "updated_at": now.isoformat()})
+            .eq("id", garment_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = result.data or []
+        return _row_to_garment(rows[0]) if rows else None
+    except Exception:
+        logger.exception("set_garment_hidden failed garment_id=%s", garment_id)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Body measurements
+# ---------------------------------------------------------------------------
+
+
+def get_measurements(user_id: str) -> Optional[BodyMeasurements]:
+    """Return saved body measurements for *user_id*, or ``None``."""
+    if _use_local_store():
+        return _local_measurements.get(user_id)
+    try:
+        result = (
+            get_supabase_client()
+            .table(_measurements_table_name())
+            .select("*")
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        if not result.data:
+            return None
+        return _row_to_measurements(result.data)
+    except Exception:
+        logger.exception("get_measurements failed user_id=%s", user_id)
+        return None
+
+
+def upsert_measurements(measurements: BodyMeasurements) -> BodyMeasurements:
+    """Create or replace body measurements for a user."""
+    if _use_local_store():
+        _local_measurements[measurements.user_id] = measurements
+        return measurements
+    payload = measurements.model_dump(mode="json")
+    try:
+        result = (
+            get_supabase_client()
+            .table(_measurements_table_name())
+            .upsert(payload, on_conflict="user_id")
+            .execute()
+        )
+        row = (result.data or [payload])[0]
+        return _row_to_measurements(row)
+    except Exception:
+        logger.exception("upsert_measurements failed user_id=%s", measurements.user_id)
+        return measurements
+
+
+def _row_to_measurements(row: dict[str, Any]) -> BodyMeasurements:
+    def _float_or_none(key: str) -> Optional[float]:
+        v = row.get(key)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    return BodyMeasurements(
+        user_id=str(row.get("user_id", "")),
+        height_cm=_float_or_none("height_cm"),
+        weight_kg=_float_or_none("weight_kg"),
+        chest_cm=_float_or_none("chest_cm"),
+        waist_cm=_float_or_none("waist_cm"),
+        hips_cm=_float_or_none("hips_cm"),
+        inseam_cm=_float_or_none("inseam_cm"),
+        updated_at=_parse_datetime(row.get("updated_at")),
+    )

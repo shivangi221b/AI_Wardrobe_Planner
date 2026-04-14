@@ -50,6 +50,7 @@ export const SEARCH_BRANDS: string[] = [
   'Under Armour',
   'Uniqlo',
   'Urban Outfitters',
+  'Urban Revivo',
   'Vans',
   'Vineyard Vines',
   'Wrangler',
@@ -117,12 +118,14 @@ export type SearchGarmentCategory = 'top' | 'bottom' | 'shoes' | 'accessory';
 
 export const SEARCH_KINDS_BY_CATEGORY: Record<SearchGarmentCategory, string[]> = {
   top: [
+    'Blazer',
     'Blouse',
     'Bodysuit',
     'Button-down shirt',
     'Cardigan',
     'Crop top',
     'Flannel shirt',
+    'Halter neck',
     'Henley',
     'Hoodie',
     'Oxford shirt',
@@ -132,6 +135,7 @@ export const SEARCH_KINDS_BY_CATEGORY: Record<SearchGarmentCategory, string[]> =
     'T-shirt',
     'Tank top',
     'Turtleneck',
+    'Vest',
   ],
   bottom: [
     'Cargo pants',
