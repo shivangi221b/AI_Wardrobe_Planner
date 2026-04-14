@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Pressable,
@@ -9,9 +9,39 @@ import {
   View,
 } from 'react-native';
 import { useAppState } from './AppStateContext';
-import { dayLabels, dayOrder, eventTypeLabels, eventTypeOptions } from './constants';
+import { dayOrder, eventTypeLabels, eventTypeOptions } from './constants';
 import type { DayOfWeek, EventType } from './types';
 import { palette, radius, type } from './theme';
+
+const TOP_CATEGORIES = ['top', 'shirt', 'blouse', 'sweater', 'jacket', 'activewear_top'];
+const BOTTOM_CATEGORIES = ['bottom', 'pants', 'jeans', 'skirt', 'activewear_bottom'];
+
+function getWeekDates(): Record<DayOfWeek, Date> {
+  const today = new Date();
+  const dayOfWeek = today.getDay();
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + mondayOffset);
+  monday.setHours(0, 0, 0, 0);
+
+  const result = {} as Record<DayOfWeek, Date>;
+  dayOrder.forEach((day, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    result[day] = d;
+  });
+  return result;
+}
+
+function formatShortDate(d: Date): string {
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function formatDayHeader(d: Date): string {
+  const weekday = d.toLocaleDateString('en-US', { weekday: 'short' });
+  const monthDay = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return `${weekday}, ${monthDay}`;
+}
 
 export function EventsScreen({
   onGenerate,
@@ -23,6 +53,7 @@ export function EventsScreen({
     setCalendarConnected,
     syncCalendarEvents,
     eventsByDay,
+    summariesByDay,
     setEventForDay,
     useDemoWeek,
     garments,
@@ -33,6 +64,18 @@ export function EventsScreen({
   const [error, setError] = useState<string | null>(null);
 
   const cardAnimations = useRef(dayOrder.map(() => new Animated.Value(0))).current;
+
+  const weekDates = useMemo(() => getWeekDates(), []);
+
+  const hasTops = useMemo(
+    () => garments.some((g) => TOP_CATEGORIES.includes(g.category)),
+    [garments]
+  );
+  const hasBottoms = useMemo(
+    () => garments.some((g) => BOTTOM_CATEGORIES.includes(g.category)),
+    [garments]
+  );
+  const canGenerate = hasTops && hasBottoms;
 
   useEffect(() => {
     Animated.stagger(
@@ -65,8 +108,8 @@ export function EventsScreen({
     }
   };
 
-  const handleSelectEvent = (day: DayOfWeek, type: EventType) => {
-    setEventForDay(day, type);
+  const handleSelectEvent = (day: DayOfWeek, eventType: EventType) => {
+    setEventForDay(day, eventType);
   };
 
   const handleGenerate = async () => {
@@ -81,35 +124,43 @@ export function EventsScreen({
     }
   };
 
+  const weekStart = weekDates.monday;
+  const weekEnd = weekDates.sunday;
+  const weekRangeLabel = `${formatShortDate(weekStart)} \u2013 ${formatShortDate(weekEnd)}`;
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Text style={styles.screenTitle}>Shape the week</Text>
+        <Text style={styles.weekRange}>{weekRangeLabel}</Text>
         <Text style={styles.screenSubtitle}>
           Set one event per day and generate seven minimalist looks from your wardrobe.
         </Text>
 
-        <View style={styles.actionsRow}>
-          <Pressable
-            onPress={handleConnect}
-            disabled={connecting}
-            style={[styles.connectButton, isCalendarConnected && styles.connectButtonActive]}
-          >
-            <Text style={[styles.connectButtonText, isCalendarConnected && styles.connectButtonTextActive]}>
-              {connecting
-                ? 'Connecting...'
-                : isCalendarConnected
-                ? 'Calendar connected'
-                : 'Connect calendar'}
-            </Text>
-          </Pressable>
-          <Pressable style={styles.demoWeekButton} onPress={useDemoWeek}>
-            <Text style={styles.demoWeekText}>Use demo week</Text>
-          </Pressable>
-        </View>
+        {isCalendarConnected ? (
+          <View style={styles.connectedChip}>
+            <Text style={styles.connectedChipText}>Google Calendar synced</Text>
+          </View>
+        ) : (
+          <View style={styles.calendarActions}>
+            <Pressable
+              onPress={handleConnect}
+              disabled={connecting}
+              style={styles.syncButton}
+            >
+              <Text style={styles.syncButtonText}>
+                {connecting ? 'Syncing...' : '\uD83D\uDCC5  Sync Google Calendar'}
+              </Text>
+            </Pressable>
+            <Pressable onPress={useDemoWeek}>
+              <Text style={styles.demoLink}>or use a demo week</Text>
+            </Pressable>
+          </View>
+        )}
 
         {dayOrder.map((day, index) => {
           const anim = cardAnimations[index];
+          const summary = summariesByDay[day];
           return (
             <Animated.View
               key={day}
@@ -128,7 +179,10 @@ export function EventsScreen({
                 },
               ]}
             >
-              <Text style={styles.dayLabel}>{dayLabels[day]}</Text>
+              <Text style={styles.dayLabel}>{formatDayHeader(weekDates[day])}</Text>
+              {summary ? (
+                <Text style={styles.calendarSummary}>{summary}</Text>
+              ) : null}
               <View style={styles.pillRow}>
                 {eventTypeOptions.map((typeOption) => {
                   const selected = eventsByDay[day] === typeOption;
@@ -149,16 +203,22 @@ export function EventsScreen({
           );
         })}
 
-        {garments.length < 2 ? (
-          <Text style={styles.helperText}>Add at least one top and one bottom in Wardrobe first.</Text>
+        {!canGenerate ? (
+          <Text style={styles.helperText}>
+            {!hasTops && !hasBottoms
+              ? 'Add at least one top and one bottom in Wardrobe to generate outfits.'
+              : !hasTops
+                ? 'Add at least one top (shirt, blouse, sweater) to generate outfits.'
+                : 'Add at least one bottom (pants, jeans, skirt) to generate outfits.'}
+          </Text>
         ) : null}
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <Pressable
           onPress={handleGenerate}
-          disabled={generating || garments.length < 2}
-          style={styles.primaryButton}
+          disabled={generating || !canGenerate}
+          style={[styles.primaryButton, !canGenerate && styles.primaryButtonDisabled]}
         >
           <Text style={styles.primaryButtonText}>
             {generating ? 'Generating your week...' : 'Generate my outfits'}
@@ -186,49 +246,53 @@ const styles = StyleSheet.create({
     color: palette.ink,
     fontFamily: type.display,
   },
+  weekRange: {
+    fontSize: 15,
+    color: palette.inkSoft,
+    fontFamily: type.bodyDemi,
+    marginTop: 2,
+  },
   screenSubtitle: {
-    marginTop: 6,
     fontSize: 14,
     lineHeight: 20,
     color: palette.muted,
     fontFamily: type.body,
   },
-  actionsRow: {
+  calendarActions: {
     marginTop: 2,
-    flexDirection: 'row',
     gap: 8,
-  },
-  connectButton: {
-    flex: 1,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: palette.lineStrong,
-    backgroundColor: palette.panel,
-    paddingVertical: 10,
     alignItems: 'center',
   },
-  connectButtonActive: {
+  syncButton: {
+    width: '100%',
+    borderRadius: radius.pill,
     backgroundColor: palette.accent,
-    borderColor: palette.accent,
+    paddingVertical: 12,
+    alignItems: 'center',
   },
-  connectButtonText: {
-    color: palette.ink,
-    fontFamily: type.bodyDemi,
-    fontSize: 13,
-  },
-  connectButtonTextActive: {
+  syncButtonText: {
     color: '#f4f4f2',
+    fontFamily: type.bodyDemi,
+    fontSize: 14,
   },
-  demoWeekButton: {
+  demoLink: {
+    color: palette.muted,
+    fontSize: 12,
+    fontFamily: type.bodyMedium,
+    textDecorationLine: 'underline',
+  },
+  connectedChip: {
+    alignSelf: 'flex-start',
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: palette.lineStrong,
-    backgroundColor: palette.accentSoft,
+    borderColor: '#4caf50',
+    backgroundColor: '#e8f5e9',
     paddingHorizontal: 12,
-    justifyContent: 'center',
+    paddingVertical: 6,
+    marginTop: 2,
   },
-  demoWeekText: {
-    color: palette.inkSoft,
+  connectedChipText: {
+    color: '#2e7d32',
     fontSize: 12,
     fontFamily: type.bodyDemi,
   },
@@ -244,6 +308,12 @@ const styles = StyleSheet.create({
     color: palette.ink,
     fontSize: 15,
     fontFamily: type.bodyDemi,
+  },
+  calendarSummary: {
+    color: palette.muted,
+    fontSize: 12,
+    fontFamily: type.body,
+    fontStyle: 'italic',
   },
   pillRow: {
     flexDirection: 'row',
@@ -286,6 +356,9 @@ const styles = StyleSheet.create({
     backgroundColor: palette.accent,
     paddingVertical: 11,
     alignItems: 'center',
+  },
+  primaryButtonDisabled: {
+    opacity: 0.5,
   },
   primaryButtonText: {
     color: '#f4f4f2',

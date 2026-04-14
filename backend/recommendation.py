@@ -28,6 +28,8 @@ _BOTTOM_CATEGORIES: frozenset[str] = frozenset(
     {"bottom", "pants", "jeans", "skirt", "activewear_bottom"}
 )
 
+_DRESS_CATEGORIES: frozenset[str] = frozenset({"dress"})
+
 # ---------------------------------------------------------------------------
 # Formality preferences per event type
 # "business" is treated as equivalent to "formal" for work contexts.
@@ -59,6 +61,13 @@ def _is_bottom(item: GarmentItem) -> bool:
     return (
         item.category.value in _BOTTOM_CATEGORIES
         or (item.sub_category is not None and item.sub_category.lower() in _BOTTOM_CATEGORIES)
+    )
+
+
+def _is_dress(item: GarmentItem) -> bool:
+    return (
+        item.category.value in _DRESS_CATEGORIES
+        or (item.sub_category is not None and item.sub_category.lower() in _DRESS_CATEGORIES)
     )
 
 
@@ -143,30 +152,51 @@ async def generate_week_recommendations(
         top = _pick_garment(wardrobe, _is_top, preferred, used_ids)
         bottom = _pick_garment(wardrobe, _is_bottom, preferred, used_ids)
 
-        # LLM generates the explanation; garment image URLs are forwarded
-        # inside generate_outfit_explanation when present.
-        explanation = await generate_outfit_explanation(
-            event.day, event.event_type, top, bottom
-        )
+        # If top or bottom is missing, try a dress as a fallback
+        dress = None
+        if top is None or bottom is None:
+            dress = _pick_garment(wardrobe, _is_dress, preferred, used_ids)
 
-        top_id = top.id if top else None
-        bottom_id = bottom.id if bottom else None
-
-        if top_id:
-            used_ids.add(top_id)
-        if bottom_id:
-            used_ids.add(bottom_id)
-
-        recommendations.append(
-            DayOutfitSuggestion(
-                day=event.day,
-                event_type=event.event_type,
-                top_id=top_id,
-                bottom_id=bottom_id,
-                top_name=_display_name(top) or "No item found",
-                bottom_name=_display_name(bottom) or "No item found",
-                explanation=explanation,
+        if dress is not None and (top is None or bottom is None):
+            explanation = await generate_outfit_explanation(
+                event.day, event.event_type, dress, None
             )
-        )
+            if dress.id:
+                used_ids.add(dress.id)
+            recommendations.append(
+                DayOutfitSuggestion(
+                    day=event.day,
+                    event_type=event.event_type,
+                    dress_id=dress.id,
+                    dress_name=_display_name(dress) or "No item found",
+                    top_name="No item found",
+                    bottom_name="No item found",
+                    explanation=explanation,
+                )
+            )
+        else:
+            explanation = await generate_outfit_explanation(
+                event.day, event.event_type, top, bottom
+            )
+
+            top_id = top.id if top else None
+            bottom_id = bottom.id if bottom else None
+
+            if top_id:
+                used_ids.add(top_id)
+            if bottom_id:
+                used_ids.add(bottom_id)
+
+            recommendations.append(
+                DayOutfitSuggestion(
+                    day=event.day,
+                    event_type=event.event_type,
+                    top_id=top_id,
+                    bottom_id=bottom_id,
+                    top_name=_display_name(top) or "No item found",
+                    bottom_name=_display_name(bottom) or "No item found",
+                    explanation=explanation,
+                )
+            )
 
     return recommendations
