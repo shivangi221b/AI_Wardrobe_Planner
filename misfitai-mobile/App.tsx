@@ -146,10 +146,6 @@ function AppContent({
 
   const handleTabChange = (nextTab: Tab) => {
     setTab(nextTab);
-    if (nextTab === 'profile') {
-      setTabHint(null);
-      return;
-    }
     if (nextTab === 'events' && !wardrobeStepComplete) {
       setTabHint('Wardrobe is complete after at least one top and one bottom.');
       return;
@@ -170,7 +166,7 @@ function AppContent({
       <StatusBar style="dark" />
       <AtmosphereBackground />
 
-      <View style={[styles.topChrome, tab === 'profile' && styles.topChromeCompact]}>
+      <View style={styles.topChrome}>
         <View style={styles.metaBar}>
           <View style={styles.metaChip}>
             <Text style={styles.metaChipText}>
@@ -184,11 +180,11 @@ function AppContent({
           </Pressable>
         </View>
 
-        {tab !== 'profile' ? <View style={styles.stepperCard}>
+        <View style={styles.stepperCard}>
           {flowSteps.map((item, index) => {
             const active = tab === item.key;
             return (
-              <React.Fragment key={item.key}>
+              <View key={item.key} style={styles.stepperSegment}>
                 <Pressable style={styles.stepperPressable} onPress={() => handleTabChange(item.key)}>
                   <View
                     style={[
@@ -210,12 +206,12 @@ function AppContent({
                   <Text style={[styles.stepLabel, active && styles.stepLabelActive]}>{item.label}</Text>
                 </Pressable>
                 {index < flowSteps.length - 1 ? <View style={styles.stepConnector} /> : null}
-              </React.Fragment>
+              </View>
             );
           })}
-        </View> : null}
+        </View>
 
-        {tab !== 'profile' ? <View style={styles.breadcrumbRow}>
+        <View style={styles.breadcrumbRow}>
           {flowSteps.map((item, index) => {
             const active = tab === item.key;
             return (
@@ -235,9 +231,9 @@ function AppContent({
               </React.Fragment>
             );
           })}
-        </View> : null}
+        </View>
 
-        {tab !== 'profile' && tabHint ? <Text style={styles.stepHint}>{tabHint}</Text> : null}
+        {tabHint ? <Text style={styles.stepHint}>{tabHint}</Text> : null}
       </View>
 
       <View style={styles.content}>
@@ -271,13 +267,6 @@ function AppContent({
             onNavigateToWardrobe={() => handleTabChange('wardrobe')}
           />
         ) : null}
-
-        {tab === 'profile' ? (
-          <ProfileScreen
-            userId={session.userId}
-            displayName={session.profile?.displayName}
-          />
-        ) : null}
       </View>
 
       <View style={styles.navBar}>
@@ -285,7 +274,6 @@ function AppContent({
           { key: 'wardrobe', label: 'Wardrobe' },
           { key: 'events', label: 'Calendar' },
           { key: 'plan', label: 'Outfits' },
-          { key: 'profile', label: 'Profile' },
         ] as const).map((item) => {
           const active = tab === item.key;
           return (
@@ -422,9 +410,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     gap: 8,
   },
-  topChromeCompact: {
-    gap: 0,
-  },
   content: {
     flex: 1,
   },
@@ -454,13 +439,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  stepperSegment: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
   },
   stepperPressable: {
-    flex: 0,
     alignItems: 'center',
     gap: 4,
-    minWidth: 56,
   },
   stepBadge: {
     width: 24,
@@ -505,8 +494,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 1,
     backgroundColor: palette.line,
-    marginTop: 12,
-    marginHorizontal: 8,
+    marginHorizontal: 6,
   },
   stepHint: {
     color: palette.muted,

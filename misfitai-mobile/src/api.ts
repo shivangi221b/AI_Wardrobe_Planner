@@ -34,91 +34,6 @@ const VISION_REQUEST_RETRIES = 2;
 const VISION_RETRY_BACKOFF_MS = 450;
 const VISION_FILE_FETCH_TIMEOUT_MS = 45000;
 
-export interface EmailAuthResult {
-  userId: string;
-  email: string;
-}
-
-const mockEmailPasswordStore = new Map<string, string>();
-
-function deriveEmailUserId(emailNormalized: string): string {
-  return `email-${emailNormalized.replace(/@/g, '-at-').replace(/\./g, '-dot-')}`;
-}
-
-/** Register with email + password (persists via ``POST /auth/register`` when not using mock API). */
-export async function registerEmailPassword(
-  email: string,
-  password: string
-): Promise<EmailAuthResult> {
-  const trimmed = email.trim();
-  if (USE_MOCK_API) {
-    const normalized = trimmed.toLowerCase();
-    if (mockEmailPasswordStore.has(normalized)) {
-      throw new ApiError('Account exists', 409, JSON.stringify({ detail: 'exists' }));
-    }
-    mockEmailPasswordStore.set(normalized, password);
-    return { userId: deriveEmailUserId(normalized), email: normalized };
-  }
-
-  const response = await fetch(`${API_BASE_URL}/auth/register`, {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: trimmed, password }),
-  });
-  const rawBody = await response.text();
-  if (!response.ok) {
-    throw new ApiError(
-      `API request failed: ${response.status} ${response.statusText}`,
-      response.status,
-      rawBody
-    );
-  }
-  const data = JSON.parse(rawBody) as { user_id?: string; email?: string };
-  const userId = (data.user_id || '').trim();
-  const normalizedEmail = (data.email || '').trim().toLowerCase();
-  if (!userId || !normalizedEmail) {
-    throw new ApiError('Invalid auth response', 502, rawBody);
-  }
-  return { userId, email: normalizedEmail };
-}
-
-/** Log in with email + password (``POST /auth/login``). */
-export async function loginEmailPassword(
-  email: string,
-  password: string
-): Promise<EmailAuthResult> {
-  const trimmed = email.trim();
-  if (USE_MOCK_API) {
-    const normalized = trimmed.toLowerCase();
-    const stored = mockEmailPasswordStore.get(normalized);
-    if (!stored || stored !== password) {
-      throw new ApiError('Invalid credentials', 401, JSON.stringify({ detail: 'invalid' }));
-    }
-    return { userId: deriveEmailUserId(normalized), email: normalized };
-  }
-
-  const response = await fetch(`${API_BASE_URL}/auth/login`, {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: trimmed, password }),
-  });
-  const rawBody = await response.text();
-  if (!response.ok) {
-    throw new ApiError(
-      `API request failed: ${response.status} ${response.statusText}`,
-      response.status,
-      rawBody
-    );
-  }
-  const data = JSON.parse(rawBody) as { user_id?: string; email?: string };
-  const userId = (data.user_id || '').trim();
-  const normalizedEmail = (data.email || '').trim().toLowerCase();
-  if (!userId || !normalizedEmail) {
-    throw new ApiError('Invalid auth response', 502, rawBody);
-  }
-  return { userId, email: normalizedEmail };
-}
-
 /** After OAuth login, record user for GET /api/metrics ``signups`` (no wardrobe required). */
 export function registerSignupWithBackend(userId: string): void {
   if (!userId?.trim() || USE_MOCK_API) return;
@@ -696,20 +611,17 @@ async function readImageBlobWithRetry(payload: VisionAddPayload): Promise<Blob> 
       const timeoutId = controller
         ? setTimeout(() => controller.abort(), VISION_FILE_FETCH_TIMEOUT_MS)
         : null;
-      try {
-        const response = await fetch(
-          payload.imageUri,
-          controller ? { signal: controller.signal } : undefined
-        );
-        if (!response.ok) {
-          throw new Error(`Failed to read selected image (${response.status}).`);
-        }
-        return await response.blob();
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
+      const response = await fetch(
+        payload.imageUri,
+        controller ? { signal: controller.signal } : undefined
+      );
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
+      if (!response.ok) {
+        throw new Error(`Failed to read selected image (${response.status}).`);
+      }
+      return await response.blob();
     } catch (error) {
       if (attempt >= VISION_REQUEST_RETRIES) {
         throw error;
@@ -724,18 +636,7 @@ function getVisionUploadFileName(payload: VisionAddPayload): string {
   if (payload.fileName?.trim()) {
     return payload.fileName.trim();
   }
-  const normalizedMimeType = payload.mimeType?.trim().toLowerCase();
-  let extension = 'jpg';
-  if (normalizedMimeType === 'image/png') {
-    extension = 'png';
-  } else if (
-    normalizedMimeType === 'image/jpeg' ||
-    normalizedMimeType === 'image/jpg'
-  ) {
-    extension = 'jpg';
-  } else if (normalizedMimeType === 'image/webp') {
-    extension = 'webp';
-  }
+  const extension = payload.mimeType?.includes('png') ? 'png' : 'jpg';
   return `wardrobe-upload-${Date.now()}.${extension}`;
 }
 
