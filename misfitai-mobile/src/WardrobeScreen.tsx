@@ -16,7 +16,7 @@ import {
   View,
 } from 'react-native';
 import { useAppState } from './AppStateContext';
-import { getApiErrorMessage, type VisionPreviewItem } from './api';
+import { getApiErrorMessage, isApiError, type VisionPreviewItem } from './api';
 import { getImageForGarment, shoesImage } from './stockImages';
 import { SearchableSelect } from './SearchableSelect';
 import {
@@ -47,8 +47,10 @@ const VISION_STATUS_MESSAGES = [
 
 export function WardrobeScreen({
   onNext,
+  isStepComplete,
 }: {
   onNext: () => void;
+  isStepComplete: boolean;
 }) {
   const {
     garments,
@@ -80,7 +82,6 @@ export function WardrobeScreen({
   const [visionCommitting, setVisionCommitting] = useState(false);
   const [visionZoomUrl, setVisionZoomUrl] = useState<string | null>(null);
 
-  const [searchQuery, setSearchQuery] = useState('');
   const [searchBrand, setSearchBrand] = useState('');
   const [searchItemKeywords, setSearchItemKeywords] = useState('');
   const [searchCategory, setSearchCategory] = useState<'top' | 'bottom' | 'shoes' | 'accessory'>('top');
@@ -109,6 +110,8 @@ export function WardrobeScreen({
   const [wardrobeFilter, setWardrobeFilter] = useState<
     'all' | 'top' | 'bottom' | 'shoes' | 'accessory'
   >('all');
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+  const [wardrobeHighlight, setWardrobeHighlight] = useState(false);
 
   const entrance = useRef(new Animated.Value(0)).current;
 
@@ -146,6 +149,72 @@ export function WardrobeScreen({
     setSearchKind('');
   }, [searchCategory]);
 
+  useEffect(() => {
+    if (!saveSuccessMessage) {
+      return;
+    }
+    const id = setTimeout(() => setSaveSuccessMessage(null), 2600);
+    return () => clearTimeout(id);
+  }, [saveSuccessMessage]);
+
+  useEffect(() => {
+    if (!wardrobeHighlight) {
+      return;
+    }
+    const id = setTimeout(() => setWardrobeHighlight(false), 2200);
+    return () => clearTimeout(id);
+  }, [wardrobeHighlight]);
+
+  const resetDescriptionInputs = () => {
+    setName('');
+    setFormality(null);
+    setSeasonality('all_season');
+    setSaveError(null);
+  };
+
+  const resetSearchInputs = () => {
+    setSearchItemKeywords('');
+    setSearchBrand('');
+    setSearchColor('');
+    setSearchMaterial('');
+    setSearchKind('');
+    setSearchFormality(null);
+    setSearchSeasonality(null);
+    setSearchGender('any');
+    setSearchResults([]);
+    setSelectedSearchIndex(null);
+    setVisibleSearchCount(8);
+    setSearchError(null);
+  };
+
+  const showWardrobeSaved = (message: string) => {
+    setSaveSuccessMessage(message);
+    setWardrobeHighlight(true);
+  };
+
+  const getVisionUploadErrorMessage = (error: unknown): string => {
+    if (isApiError(error)) {
+      if (error.status === 413) {
+        return 'That image is too large. Please upload a smaller clothing-item photo.';
+      }
+      if (error.status >= 500) {
+        return 'We had trouble processing that photo. Please retry in a moment.';
+      }
+      return getApiErrorMessage(
+        error,
+        'Could not upload that clothing-item photo. Please try again.'
+      );
+    }
+    const message = error instanceof Error ? error.message : '';
+    if (/network request failed|failed to fetch|network/i.test(message)) {
+      return 'Upload failed due to a network issue. Check your connection and retry.';
+    }
+    if (/aborted|timeout/i.test(message)) {
+      return 'Upload took too long. Please retry with a smaller, clearer item photo.';
+    }
+    return 'Could not upload that clothing-item photo. Please try again.';
+  };
+
   const handleSave = async () => {
     if (!name.trim()) {
       return;
@@ -160,9 +229,8 @@ export function WardrobeScreen({
         formality: formality ?? undefined,
         seasonality,
       });
-      setName('');
-      setFormality(null);
-      setSeasonality('all_season');
+      resetDescriptionInputs();
+      showWardrobeSaved('Item saved to wardrobe!');
     } catch {
       setSaveError('Could not save this item. Please try again.');
     } finally {
@@ -178,27 +246,40 @@ export function WardrobeScreen({
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
-        quality: 1,
+        quality: 0.85,
       });
       if (result.canceled || !result.assets.length) {
         return;
       }
-      setVisionSaving(true);
       const asset = result.assets[0];
+      if (asset.mimeType && !asset.mimeType.startsWith('image/')) {
+        setVisionError('Please choose an image file (JPG/PNG/WebP).');
+        return;
+      }
+      if (asset.fileSize && asset.fileSize > 15 * 1024 * 1024) {
+        setVisionError('That image is larger than 15MB. Please upload a smaller clothing-item photo.');
+        return;
+      }
+      setVisionSaving(true);
       const items = await previewVisionItems({
         imageUri: asset.uri,
         fileName: asset.fileName || undefined,
         mimeType: asset.mimeType || undefined,
+        fileSize: asset.fileSize,
       });
+      if (!items.length) {
+        setVisionError(
+          'No clothing item was detected. Upload one clear photo of a single item on a plain background.'
+        );
+        return;
+      }
       setVisionPreviewItems(items);
       const selected: Record<number, boolean> = {};
       // All selected by default; user can uncheck or use Select all/none.
       items.forEach((_, idx) => (selected[idx] = true));
       setVisionSelected(selected);
-    } catch (error) {
-      setVisionError(
-        getApiErrorMessage(error, 'Vision beta failed while processing your image. Please try another photo.')
-      );
+    } catch (error: unknown) {
+      setVisionError(getVisionUploadErrorMessage(error));
     } finally {
       setVisionSaving(false);
     }
@@ -256,14 +337,8 @@ export function WardrobeScreen({
         imageUrl: selected.imageUrl,
       });
       setSearchBrand('');
-      setSearchItemKeywords('');
-      setSearchColor('');
-      setSearchMaterial('');
-      setSearchKind('');
-      setSearchFormality(null);
-      setSearchSeasonality('all_season');
-      setSearchResults([]);
-      setSelectedSearchIndex(null);
+      resetSearchInputs();
+      showWardrobeSaved('Item saved to wardrobe!');
     } catch (error) {
       setSearchError(getApiErrorMessage(error, 'Could not add this item. Please try again.'));
     } finally {
@@ -271,57 +346,7 @@ export function WardrobeScreen({
     }
   };
 
-  const handleManualSave = async () => {
-    if (selectedSearchIndex !== null) {
-      const selected = searchResults[selectedSearchIndex];
-      if (!selected?.imageUrl) return;
-      try {
-        setSearchAdding(true);
-        setSearchError(null);
-        await addGarmentViaSearch({
-          name: (name.trim() || selected.title || searchQuery || 'Garment').trim(),
-          category,
-          color: searchColor.trim(),
-          formality: formality ?? undefined,
-          seasonality,
-          imageUrl: selected.imageUrl,
-        });
-        setName('');
-        setSearchQuery('');
-        setSearchColor('');
-        setSearchMaterial('');
-        setSearchKind('');
-        setFormality(null);
-        setSeasonality('all_season');
-        setSearchResults([]);
-        setSelectedSearchIndex(null);
-      } catch (error) {
-        setSearchError(getApiErrorMessage(error, 'Could not add this item. Please try again.'));
-      } finally {
-        setSearchAdding(false);
-      }
-    } else {
-      if (!name.trim()) return;
-      try {
-        setSaving(true);
-        setSaveError(null);
-        await addGarmentToWardrobe({
-          name: name.trim(),
-          category,
-          formality: formality ?? undefined,
-          seasonality,
-        });
-        setName('');
-        setFormality(null);
-        setSeasonality('all_season');
-      } catch {
-        setSaveError('Could not save this item. Please try again.');
-      } finally {
-        setSaving(false);
-      }
-    }
-  };
-
+  // Keep explicit delete confirmation to avoid accidental wardrobe item removal.
   const handleDeletePress = (garment: { id: string; name: string }) => {
     const doDelete = () => {
       deleteGarmentFromWardrobe(garment.id).catch(() => {
@@ -345,7 +370,6 @@ export function WardrobeScreen({
       );
     }
   };
-
   const animatedStyle = {
     opacity: entrance,
     transform: [
@@ -400,10 +424,16 @@ export function WardrobeScreen({
                 style={[styles.chip, addMode === 'manual' && styles.chipActive]}
               >
                 <Text style={[styles.chipText, addMode === 'manual' && styles.chipTextActive]}>
-                  Manual
+                  Describe item
                 </Text>
               </Pressable>
             </View>
+
+            {saveSuccessMessage ? (
+              <View style={styles.successBanner}>
+                <Text style={styles.successBannerText}>{saveSuccessMessage}</Text>
+              </View>
+            ) : null}
 
             {addMode === 'vision' ? (
               <>
@@ -417,7 +447,9 @@ export function WardrobeScreen({
                       <ActivityIndicator color={palette.ink} />
                     ) : null}
                     <Text style={styles.visionButtonText}>
-                      {visionSaving ? VISION_STATUS_MESSAGES[visionStatusIndex] : 'Upload via Vision beta'}
+                      {visionSaving
+                        ? VISION_STATUS_MESSAGES[visionStatusIndex]
+                        : 'Upload via Vision beta'}
                     </Text>
                   </View>
                 </Pressable>
@@ -505,8 +537,16 @@ export function WardrobeScreen({
                           await commitVisionItems(chosen);
                           setVisionPreviewItems([]);
                           setVisionSelected({});
+                          showWardrobeSaved(
+                            `${chosen.length} item${chosen.length === 1 ? '' : 's'} saved to wardrobe!`
+                          );
                         } catch (error) {
-                          setVisionError(getApiErrorMessage(error, 'Could not add items. Please try again.'));
+                          setVisionError(
+                            getApiErrorMessage(
+                              error,
+                              'Could not save selected items. Please try again.'
+                            )
+                          );
                         } finally {
                           setVisionCommitting(false);
                         }
@@ -522,488 +562,369 @@ export function WardrobeScreen({
               </>
             ) : null}
 
-            {false ? (
-              <>
-          <Text style={styles.visionTitle}>Search & Add</Text>
-            <Text style={styles.visionCopy}>
-              Pick category, brand, and filters—type in any list to narrow it—or use Other for custom values.
-              Add optional keywords, then search and choose an image.
-            </Text>
-            <Text style={styles.label}>Category</Text>
-            <View style={styles.chipRow}>
-              <Pressable
-                onPress={() => setSearchCategory('top')}
-                style={[styles.chip, searchCategory === 'top' && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, searchCategory === 'top' && styles.chipTextActive]}>
-                  Top
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setSearchCategory('bottom')}
-                style={[styles.chip, searchCategory === 'bottom' && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, searchCategory === 'bottom' && styles.chipTextActive]}>
-                  Bottom
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setSearchCategory('shoes')}
-                style={[styles.chip, searchCategory === 'shoes' && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, searchCategory === 'shoes' && styles.chipTextActive]}>
-                  Footwear
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setSearchCategory('accessory')}
-                style={[styles.chip, searchCategory === 'accessory' && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, searchCategory === 'accessory' && styles.chipTextActive]}>
-                  Accessory
-                </Text>
-              </Pressable>
-            </View>
-
-            <SearchableSelect
-              label="Brand"
-              value={searchBrand}
-              onChange={setSearchBrand}
-              options={SEARCH_BRANDS}
-              placeholder="Type to filter brands…"
-              emptyLabel="Any brand"
-              optional
-            />
-            <Text style={styles.label}>Item keywords (optional)</Text>
-            <TextInput
-              value={searchItemKeywords}
-              onChangeText={setSearchItemKeywords}
-              placeholder="e.g. linen shirt, running, slim fit"
-              placeholderTextColor="#8f8f8a"
-              style={styles.input}
-              returnKeyType="search"
-              onSubmitEditing={handleSearch}
-            />
-            <View style={styles.row}>
-              <View style={styles.col}>
-                <SearchableSelect
-                  label="Colour (optional)"
-                  value={searchColor}
-                  onChange={setSearchColor}
-                  options={SEARCH_COLORS}
-                  placeholder="Type to filter colours…"
-                  emptyLabel="Any"
-                  optional
-                />
-              </View>
-              <View style={styles.col}>
-                <SearchableSelect
-                  label="Material (optional)"
-                  value={searchMaterial}
-                  onChange={setSearchMaterial}
-                  options={SEARCH_MATERIALS}
-                  placeholder="Type to filter materials…"
-                  emptyLabel="Any"
-                  optional
-                />
-              </View>
-            </View>
-            <SearchableSelect
-              label="Type / detail (optional)"
-              value={searchKind}
-              onChange={setSearchKind}
-              options={SEARCH_KINDS_BY_CATEGORY[searchCategory]}
-              placeholder="Type to filter types…"
-              emptyLabel="Any"
-              optional
-            />
-            <View style={styles.row}>
-              <View style={styles.col}>
-                <Text style={styles.label}>For (optional)</Text>
-                <View style={styles.chipRow}>
-                  <Pressable
-                    onPress={() => setSearchGender('any')}
-                    style={[
-                      styles.chip,
-                      searchGender === 'any' && styles.chipActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        searchGender === 'any' && styles.chipTextActive,
-                      ]}
-                    >
-                      All
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => setSearchGender('women')}
-                    style={[
-                      styles.chip,
-                      searchGender === 'women' && styles.chipActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        searchGender === 'women' && styles.chipTextActive,
-                      ]}
-                    >
-                      Women
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => setSearchGender('men')}
-                    style={[
-                      styles.chip,
-                      searchGender === 'men' && styles.chipActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        searchGender === 'men' && styles.chipTextActive,
-                      ]}
-                    >
-                      Men
-                    </Text>
-                  </Pressable>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.row}>
-              <View style={styles.col}>
-                <Text style={styles.label}>Formality (optional)</Text>
-                <View style={styles.chipRow}>
-                  {(['casual', 'smart_casual', 'business', 'formal'] as const).map((item) => {
-                    const active = searchFormality === item;
-                    return (
-                      <Pressable
-                        key={item}
-                        onPress={() =>
-                          setSearchFormality((current) => (current === item ? null : item))
-                        }
-                        style={[styles.chip, active && styles.chipActive]}
-                      >
-                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                          {item === 'smart_casual'
-                            ? 'Smart casual'
-                            : item[0].toUpperCase() + item.slice(1)}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
-
-              <View style={styles.col}>
-                <Text style={styles.label}>Seasonality (optional)</Text>
-                <View style={styles.chipRow}>
-                  {(['all_season', 'hot', 'mild', 'cold'] as const).map((item) => {
-                    const active = searchSeasonality === item;
-                    const label =
-                      item === 'all_season'
-                        ? 'All season'
-                        : item[0].toUpperCase() + item.slice(1);
-                    return (
-                      <Pressable
-                        key={item}
-                        onPress={() =>
-                          setSearchSeasonality((current) => (current === item ? null : item))
-                        }
-                        style={[styles.chip, active && styles.chipActive]}
-                      >
-                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                          {label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.actionsRow}>
-              <Pressable
-                onPress={handleSearch}
-                disabled={searching}
-                style={styles.searchPrimaryButton}
-              >
-                <Text style={styles.searchPrimaryButtonText}>
-                  {searching
-                    ? SEARCH_STATUS_MESSAGES[searchStatusIndex]
-                    : 'Search'}
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={handleSearchAdd}
-                disabled={searchAdding || selectedSearchIndex === null}
-                style={[
-                  styles.searchSecondaryButton,
-                  (searchAdding || selectedSearchIndex === null) &&
-                    styles.searchSecondaryButtonDisabled,
-                ]}
-              >
-                <Text style={styles.searchSecondaryButtonText}>
-                  {searchAdding ? 'Adding...' : 'Add to wardrobe'}
-                </Text>
-              </Pressable>
-            </View>
-
-            {searchResults.length ? (
-              <View style={styles.searchResultsGrid}>
-                {searchResults.slice(0, visibleSearchCount).map((item, index) => {
-                  const active = selectedSearchIndex === index;
-                  return (
-                    <Pressable
-                      key={`${item.imageUrl}-${index}`}
-                      onPress={() => setSelectedSearchIndex(index)}
-                      style={[
-                        styles.searchResultCard,
-                        active && styles.searchResultCardActive,
-                      ]}
-                    >
-                      <Image
-                        source={{ uri: item.imageUrl }}
-                        style={styles.searchResultImage}
-                        resizeMode="contain"
-                      />
-                      <Text
-                        numberOfLines={2}
-                        style={styles.searchResultTitle}
-                      >
-                        {item.title || 'Result'}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            ) : null}
-
-            {searchResults.length > visibleSearchCount ? (
-              <Pressable
-                onPress={() =>
-                  setVisibleSearchCount((current) =>
-                    Math.min(current + 8, searchResults.length)
-                  )
-                }
-                style={styles.visionButton}
-              >
-                <Text style={styles.visionButtonText}>Show more results</Text>
-              </Pressable>
-            ) : null}
-
-            {searchError ? <Text style={styles.errorText}>{searchError}</Text> : null}
-              </>
-            ) : null}
-
             {addMode === 'manual' ? (
               <>
-                <Text style={styles.label}>Name</Text>
-                <TextInput
-                  value={name}
-                  onChangeText={setName}
-                  placeholder="Black pleated trousers"
-                  placeholderTextColor="#8f8f8a"
-                  style={styles.input}
-                />
+                <View style={styles.methodCard}>
+                  <View style={styles.methodHeader}>
+                    <Text style={styles.methodBadge}>Method 1</Text>
+                    <Text style={styles.methodHint}>Direct save</Text>
+                  </View>
+                  <Text style={styles.visionTitle}>Add by description</Text>
+                  <Text style={styles.visionCopy}>
+                    Use this if you already know the item details. No image search required.
+                  </Text>
 
-                <View style={styles.row}>
-                  <View style={styles.col}>
-                    <Text style={styles.label}>Category</Text>
-                    <View style={styles.chipRow}>
-                      <Pressable
-                        onPress={() => setCategory('top')}
-                        style={[styles.chip, category === 'top' && styles.chipActive]}
-                      >
-                        <Text style={[styles.chipText, category === 'top' && styles.chipTextActive]}>Top</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => setCategory('bottom')}
-                        style={[styles.chip, category === 'bottom' && styles.chipActive]}
-                      >
-                        <Text style={[styles.chipText, category === 'bottom' && styles.chipTextActive]}>Bottom</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => setCategory('shoes')}
-                        style={[styles.chip, category === 'shoes' && styles.chipActive]}
-                      >
-                        <Text style={[styles.chipText, category === 'shoes' && styles.chipTextActive]}>Footwear</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => setCategory('accessory')}
-                        style={[styles.chip, category === 'accessory' && styles.chipActive]}
-                      >
-                        <Text style={[styles.chipText, category === 'accessory' && styles.chipTextActive]}>Accessory</Text>
-                      </Pressable>
+                  <Text style={styles.label}>Name</Text>
+                  <TextInput
+                    value={name}
+                    onChangeText={setName}
+                    placeholder="Black pleated trousers"
+                    placeholderTextColor={palette.inputPlaceholder}
+                    style={styles.input}
+                  />
+
+                  <View style={styles.row}>
+                    <View style={styles.col}>
+                      <Text style={styles.label}>Category</Text>
+                      <View style={styles.chipRow}>
+                        <Pressable
+                          onPress={() => setCategory('top')}
+                          style={[styles.chip, category === 'top' && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipText, category === 'top' && styles.chipTextActive]}>Top</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => setCategory('bottom')}
+                          style={[styles.chip, category === 'bottom' && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipText, category === 'bottom' && styles.chipTextActive]}>Bottom</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => setCategory('shoes')}
+                          style={[styles.chip, category === 'shoes' && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipText, category === 'shoes' && styles.chipTextActive]}>Footwear</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => setCategory('accessory')}
+                          style={[styles.chip, category === 'accessory' && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipText, category === 'accessory' && styles.chipTextActive]}>
+                            Accessory
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+
+                    <View style={styles.col}>
+                      <Text style={styles.label}>Formality (optional)</Text>
+                      <View style={styles.chipRow}>
+                        {(['casual', 'smart_casual', 'business', 'formal'] as const).map((item) => {
+                          const active = formality === item;
+                          return (
+                            <Pressable
+                              key={item}
+                              onPress={() => setFormality((current) => (current === item ? null : item))}
+                              style={[styles.chip, active && styles.chipActive]}
+                            >
+                              <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                                {item === 'smart_casual'
+                                  ? 'Smart casual'
+                                  : item[0].toUpperCase() + item.slice(1)}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
                     </View>
                   </View>
 
-                  <View style={styles.col}>
-                    <Text style={styles.label}>Formality (optional)</Text>
-                    <View style={styles.chipRow}>
-                      {(['casual', 'smart_casual', 'business', 'formal'] as const).map((item) => {
-                        const active = formality === item;
+                  <Text style={styles.label}>Seasonality</Text>
+                  <View style={styles.chipRow}>
+                    {(['all_season', 'hot', 'mild', 'cold'] as const).map((item) => {
+                      const active = seasonality === item;
+                      const label =
+                        item === 'all_season' ? 'All season' : item[0].toUpperCase() + item.slice(1);
+                      return (
+                        <Pressable
+                          key={item}
+                          onPress={() => setSeasonality(item)}
+                          style={[styles.chip, active && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  <Pressable
+                    onPress={handleSave}
+                    disabled={saving}
+                    style={[styles.primaryButton, saving && styles.searchSecondaryButtonDisabled]}
+                  >
+                    <Text style={styles.primaryButtonText}>{saving ? 'Saving...' : 'Save garment'}</Text>
+                  </Pressable>
+                  {saveError ? <Text style={styles.errorText}>{saveError}</Text> : null}
+                </View>
+
+                <View style={styles.methodDivider} />
+
+                <View style={styles.methodCard}>
+                  <View style={styles.methodHeader}>
+                    <Text style={styles.methodBadge}>Method 2</Text>
+                    <Text style={styles.methodHint}>Search and add</Text>
+                  </View>
+                  <Text style={styles.visionTitle}>Search a product image and add</Text>
+                  <Text style={styles.visionCopy}>
+                    Use this when you want to pick an image result first, then add it directly.
+                  </Text>
+
+                  <Text style={styles.label}>Category</Text>
+                  <View style={styles.chipRow}>
+                    <Pressable
+                      onPress={() => setSearchCategory('top')}
+                      style={[styles.chip, searchCategory === 'top' && styles.chipActive]}
+                    >
+                      <Text style={[styles.chipText, searchCategory === 'top' && styles.chipTextActive]}>
+                        Top
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setSearchCategory('bottom')}
+                      style={[styles.chip, searchCategory === 'bottom' && styles.chipActive]}
+                    >
+                      <Text style={[styles.chipText, searchCategory === 'bottom' && styles.chipTextActive]}>
+                        Bottom
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setSearchCategory('shoes')}
+                      style={[styles.chip, searchCategory === 'shoes' && styles.chipActive]}
+                    >
+                      <Text style={[styles.chipText, searchCategory === 'shoes' && styles.chipTextActive]}>
+                        Footwear
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setSearchCategory('accessory')}
+                      style={[styles.chip, searchCategory === 'accessory' && styles.chipActive]}
+                    >
+                      <Text style={[styles.chipText, searchCategory === 'accessory' && styles.chipTextActive]}>
+                        Accessory
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  <SearchableSelect
+                    label="Brand"
+                    value={searchBrand}
+                    onChange={setSearchBrand}
+                    options={SEARCH_BRANDS}
+                    placeholder="Type to filter brands…"
+                    emptyLabel="Any brand"
+                    optional
+                  />
+                  <Text style={styles.label}>Item keywords (optional)</Text>
+                  <TextInput
+                    value={searchItemKeywords}
+                    onChangeText={setSearchItemKeywords}
+                    placeholder="e.g. linen shirt, running, slim fit"
+                    placeholderTextColor={palette.inputPlaceholder}
+                    style={styles.input}
+                    returnKeyType="search"
+                    onSubmitEditing={handleSearch}
+                  />
+                  <View style={styles.row}>
+                    <View style={styles.col}>
+                      <SearchableSelect
+                        label="Colour (optional)"
+                        value={searchColor}
+                        onChange={setSearchColor}
+                        options={SEARCH_COLORS}
+                        placeholder="Type to filter colours…"
+                        emptyLabel="Any"
+                        optional
+                      />
+                    </View>
+                    <View style={styles.col}>
+                      <SearchableSelect
+                        label="Material (optional)"
+                        value={searchMaterial}
+                        onChange={setSearchMaterial}
+                        options={SEARCH_MATERIALS}
+                        placeholder="Type to filter materials…"
+                        emptyLabel="Any"
+                        optional
+                      />
+                    </View>
+                  </View>
+                  <SearchableSelect
+                    label="Type / detail (optional)"
+                    value={searchKind}
+                    onChange={setSearchKind}
+                    options={SEARCH_KINDS_BY_CATEGORY[searchCategory]}
+                    placeholder="Type to filter types…"
+                    emptyLabel="Any"
+                    optional
+                  />
+                  <View style={styles.row}>
+                    <View style={styles.col}>
+                      <Text style={styles.label}>For (optional)</Text>
+                      <View style={styles.chipRow}>
+                        <Pressable
+                          onPress={() => setSearchGender('any')}
+                          style={[styles.chip, searchGender === 'any' && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipText, searchGender === 'any' && styles.chipTextActive]}>
+                            All
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => setSearchGender('women')}
+                          style={[styles.chip, searchGender === 'women' && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipText, searchGender === 'women' && styles.chipTextActive]}>
+                            Women
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => setSearchGender('men')}
+                          style={[styles.chip, searchGender === 'men' && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipText, searchGender === 'men' && styles.chipTextActive]}>
+                            Men
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.row}>
+                    <View style={styles.col}>
+                      <Text style={styles.label}>Formality (optional)</Text>
+                      <View style={styles.chipRow}>
+                        {(['casual', 'smart_casual', 'business', 'formal'] as const).map((item) => {
+                          const active = searchFormality === item;
+                          return (
+                            <Pressable
+                              key={item}
+                              onPress={() =>
+                                setSearchFormality((current) => (current === item ? null : item))
+                              }
+                              style={[styles.chip, active && styles.chipActive]}
+                            >
+                              <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                                {item === 'smart_casual'
+                                  ? 'Smart casual'
+                                  : item[0].toUpperCase() + item.slice(1)}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
+
+                    <View style={styles.col}>
+                      <Text style={styles.label}>Seasonality (optional)</Text>
+                      <View style={styles.chipRow}>
+                        {(['all_season', 'hot', 'mild', 'cold'] as const).map((item) => {
+                          const active = searchSeasonality === item;
+                          const label =
+                            item === 'all_season'
+                              ? 'All season'
+                              : item[0].toUpperCase() + item.slice(1);
+                          return (
+                            <Pressable
+                              key={item}
+                              onPress={() =>
+                                setSearchSeasonality((current) => (current === item ? null : item))
+                              }
+                              style={[styles.chip, active && styles.chipActive]}
+                            >
+                              <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                                {label}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.actionsRow}>
+                    <Pressable
+                      onPress={handleSearch}
+                      disabled={searching}
+                      style={styles.searchPrimaryButton}
+                    >
+                      <Text style={styles.searchPrimaryButtonText}>
+                        {searching ? SEARCH_STATUS_MESSAGES[searchStatusIndex] : 'Search images'}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleSearchAdd}
+                      disabled={searchAdding || selectedSearchIndex === null}
+                      style={[
+                        styles.searchSecondaryButton,
+                        (searchAdding || selectedSearchIndex === null) &&
+                          styles.searchSecondaryButtonDisabled,
+                      ]}
+                    >
+                      <Text style={styles.searchSecondaryButtonText}>
+                        {searchAdding ? 'Adding...' : 'Add selected to wardrobe'}
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  {searchResults.length ? (
+                    <View style={styles.searchResultsGrid}>
+                      {searchResults.slice(0, visibleSearchCount).map((item, index) => {
+                        const active = selectedSearchIndex === index;
                         return (
                           <Pressable
-                            key={item}
-                            onPress={() => setFormality((current) => (current === item ? null : item))}
-                            style={[styles.chip, active && styles.chipActive]}
+                            key={`${item.imageUrl}-${index}`}
+                            onPress={() => setSelectedSearchIndex(index)}
+                            style={[
+                              styles.searchResultCard,
+                              active && styles.searchResultCardActive,
+                            ]}
                           >
-                            <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                              {item === 'smart_casual' ? 'Smart casual' : item[0].toUpperCase() + item.slice(1)}
+                            <Image
+                              source={{ uri: item.imageUrl }}
+                              style={styles.searchResultImage}
+                              resizeMode="contain"
+                            />
+                            <Text numberOfLines={2} style={styles.searchResultTitle}>
+                              {item.title || 'Result'}
                             </Text>
                           </Pressable>
                         );
                       })}
                     </View>
-                  </View>
+                  ) : null}
+
+                  {searchResults.length > visibleSearchCount ? (
+                    <Pressable
+                      onPress={() =>
+                        setVisibleSearchCount((current) =>
+                          Math.min(current + 8, searchResults.length)
+                        )
+                      }
+                      style={styles.visionButton}
+                    >
+                      <Text style={styles.visionButtonText}>Show more results</Text>
+                    </Pressable>
+                  ) : null}
+
+                  {searchError ? <Text style={styles.errorText}>{searchError}</Text> : null}
                 </View>
-
-                <Text style={styles.label}>Seasonality</Text>
-                <View style={styles.chipRow}>
-                  {(['all_season', 'hot', 'mild', 'cold'] as const).map((item) => {
-                    const active = seasonality === item;
-                    const label = item === 'all_season' ? 'All season' : item[0].toUpperCase() + item.slice(1);
-                    return (
-                      <Pressable
-                        key={item}
-                        onPress={() => setSeasonality(item)}
-                        style={[styles.chip, active && styles.chipActive]}
-                      >
-                        <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-
-                <SearchableSelect
-                  label="Brand (optional)"
-                  value={searchBrand}
-                  onChange={setSearchBrand}
-                  options={SEARCH_BRANDS}
-                  placeholder="Type to filter brands…"
-                  emptyLabel="Any brand"
-                  optional
-                />
-                <View style={styles.row}>
-                  <View style={styles.col}>
-                    <SearchableSelect
-                      label="Colour (optional)"
-                      value={searchColor}
-                      onChange={setSearchColor}
-                      options={SEARCH_COLORS}
-                      placeholder="Type to filter colours…"
-                      emptyLabel="Any"
-                      optional
-                    />
-                  </View>
-                  <View style={styles.col}>
-                    <SearchableSelect
-                      label="Material (optional)"
-                      value={searchMaterial}
-                      onChange={setSearchMaterial}
-                      options={SEARCH_MATERIALS}
-                      placeholder="Type to filter materials…"
-                      emptyLabel="Any"
-                      optional
-                    />
-                  </View>
-                </View>
-                <SearchableSelect
-                  label="Type / detail (optional)"
-                  value={searchKind}
-                  onChange={setSearchKind}
-                  options={SEARCH_KINDS_BY_CATEGORY[category]}
-                  placeholder="Type to filter types…"
-                  emptyLabel="Any"
-                  optional
-                />
-                <Text style={[styles.visionTitle, { marginTop: 14 }]}>Search image (optional)</Text>
-                <Text style={styles.visionCopy}>
-                  Type a brand + item to find a product image. Pick one to attach it when saving.
-                </Text>
-                <TextInput
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder="Zara black linen shirt"
-                  placeholderTextColor="#8f8f8a"
-                  style={styles.input}
-                  returnKeyType="search"
-                  onSubmitEditing={handleSearch}
-                />
-                <View style={styles.row}>
-                  <View style={styles.col}>
-                    <Text style={styles.label}>For (optional)</Text>
-                    <View style={styles.chipRow}>
-                      <Pressable onPress={() => setSearchGender('any')} style={[styles.chip, searchGender === 'any' && styles.chipActive]}>
-                        <Text style={[styles.chipText, searchGender === 'any' && styles.chipTextActive]}>All</Text>
-                      </Pressable>
-                      <Pressable onPress={() => setSearchGender('women')} style={[styles.chip, searchGender === 'women' && styles.chipActive]}>
-                        <Text style={[styles.chipText, searchGender === 'women' && styles.chipTextActive]}>Women</Text>
-                      </Pressable>
-                      <Pressable onPress={() => setSearchGender('men')} style={[styles.chip, searchGender === 'men' && styles.chipActive]}>
-                        <Text style={[styles.chipText, searchGender === 'men' && styles.chipTextActive]}>Men</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                </View>
-
-                <Pressable onPress={handleSearch} disabled={searching} style={styles.searchPrimaryButton}>
-                  <Text style={styles.searchPrimaryButtonText}>
-                    {searching ? SEARCH_STATUS_MESSAGES[searchStatusIndex] : 'Search image'}
-                  </Text>
-                </Pressable>
-
-                {searchResults.length ? (
-                  <View style={styles.searchResultsGrid}>
-                    {searchResults.slice(0, visibleSearchCount).map((item, index) => {
-                      const active = selectedSearchIndex === index;
-                      return (
-                        <Pressable
-                          key={`${item.imageUrl}-${index}`}
-                          onPress={() => setSelectedSearchIndex(index)}
-                          style={[styles.searchResultCard, active && styles.searchResultCardActive]}
-                        >
-                          <Image source={{ uri: item.imageUrl }} style={styles.searchResultImage} resizeMode="contain" />
-                          <Text numberOfLines={2} style={styles.searchResultTitle}>{item.title || 'Result'}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                ) : null}
-
-                {searchResults.length > visibleSearchCount ? (
-                  <Pressable
-                    onPress={() => setVisibleSearchCount((current) => Math.min(current + 8, searchResults.length))}
-                    style={styles.visionButton}
-                  >
-                    <Text style={styles.visionButtonText}>Show more results</Text>
-                  </Pressable>
-                ) : null}
-
-                {searchError ? <Text style={styles.errorText}>{searchError}</Text> : null}
-
-                <Pressable
-                  onPress={handleManualSave}
-                  disabled={saving || searchAdding}
-                  style={[styles.primaryButton, { marginTop: 10 }]}
-                >
-                  <Text style={styles.primaryButtonText}>
-                    {saving || searchAdding ? 'Saving...' : selectedSearchIndex !== null ? 'Save with image' : 'Save garment'}
-                  </Text>
-                </Pressable>
-
-                {saveError ? <Text style={styles.errorText}>{saveError}</Text> : null}
               </>
             ) : null}
 
           </View>
 
           {/* My wardrobe with simple category tabs */}
-          <View style={styles.formCard}>
+          <View style={[styles.formCard, wardrobeHighlight && styles.formCardHighlight]}>
             <Text style={styles.formTitle}>My wardrobe</Text>
             <View style={styles.chipRow}>
               <Pressable
@@ -1127,8 +1048,13 @@ export function WardrobeScreen({
             ) : null}
           </View>
 
+          <Text style={styles.stepHelperText}>
+            {isStepComplete
+              ? 'Wardrobe complete. Next: connect your calendar.'
+              : 'Add at least one top and one bottom to complete this step.'}
+          </Text>
           <Pressable onPress={onNext} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Continue to week events</Text>
+            <Text style={styles.secondaryButtonText}>Next: Connect your calendar</Text>
           </Pressable>
         </ScrollView>
       </Animated.View>
@@ -1253,21 +1179,21 @@ const styles = StyleSheet.create({
   },
   zoomBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.92)',
+    backgroundColor: palette.backdropStrong,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 18,
   },
-   zoomInner: {
-     width: '100%',
-     height: '100%',
-     borderRadius: radius.lg,
-     overflow: 'hidden',
-     backgroundColor: 'black',
-   },
+  zoomInner: {
+    width: '100%',
+    height: '100%',
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+    backgroundColor: palette.backdropSolid,
+  },
   zoomImage: {
-     width: '100%',
-     height: '100%',
+    width: '100%',
+    height: '100%',
   },
   visionSelectAll: {
     paddingHorizontal: 8,
@@ -1327,10 +1253,59 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 8,
   },
+  methodCard: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: palette.line,
+    backgroundColor: palette.panelStrong,
+    padding: 12,
+    gap: 8,
+  },
+  methodHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  methodBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: palette.accent,
+    color: palette.textOnAccent,
+    fontSize: 11,
+    fontFamily: type.bodyDemi,
+  },
+  methodHint: {
+    color: palette.muted,
+    fontSize: 12,
+    fontFamily: type.bodyMedium,
+  },
+  methodDivider: {
+    height: 1,
+    backgroundColor: palette.line,
+    marginVertical: 6,
+  },
+  formCardHighlight: {
+    borderColor: palette.accent,
+    backgroundColor: palette.accentSoft,
+  },
   formTitle: {
     fontSize: 18,
     color: palette.ink,
     fontFamily: type.bodyDemi,
+  },
+  successBanner: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.accent,
+    backgroundColor: palette.accentSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  successBannerText: {
+    color: palette.ink,
+    fontSize: 13,
+    fontFamily: type.bodyMedium,
   },
   label: {
     color: palette.muted,
@@ -1386,7 +1361,7 @@ const styles = StyleSheet.create({
     fontFamily: type.bodyMedium,
   },
   chipTextActive: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
   },
   primaryButton: {
     marginTop: 4,
@@ -1396,7 +1371,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryButtonText: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
     fontSize: 14,
     fontFamily: type.bodyDemi,
   },
@@ -1411,9 +1386,15 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   primaryChipButtonText: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
     fontSize: 12,
     fontFamily: type.bodyDemi,
+  },
+  stepHelperText: {
+    marginTop: 10,
+    color: palette.muted,
+    fontSize: 12,
+    fontFamily: type.body,
   },
   secondaryButton: {
     marginTop: 10,
@@ -1474,7 +1455,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   searchPrimaryButtonText: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
     fontSize: 14,
     fontFamily: type.bodyDemi,
   },

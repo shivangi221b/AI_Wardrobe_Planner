@@ -332,7 +332,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   modeButtonTextActive: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
   },
   authCard: {
     borderRadius: 24,
@@ -360,7 +360,7 @@ const styles = StyleSheet.create({
     fontFamily: type.bodyDemi,
   },
   providerButtonPrimaryText: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
     fontSize: 14,
     fontFamily: type.bodyDemi,
   },
