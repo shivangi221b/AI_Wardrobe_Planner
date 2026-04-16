@@ -20,3 +20,8 @@ python-multipart
 supabase
 google-analytics-data
 
+# Testing
+pytest
+pytest-asyncio
+pytest-cov
+
