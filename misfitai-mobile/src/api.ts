@@ -91,6 +91,7 @@ interface WardrobeApiItem {
 interface WeekEventApi {
   day: string;
   event_type: string;
+  original_summary?: string;
 }
 
 interface RecommendationApi {
@@ -100,6 +101,8 @@ interface RecommendationApi {
   bottom_id?: string | null;
   top_name?: string | null;
   bottom_name?: string | null;
+  dress_id?: string | null;
+  dress_name?: string | null;
   explanation?: string;
   outfit?: {
     id?: string;
@@ -109,6 +112,9 @@ interface RecommendationApi {
     bottom_id?: string | null;
     top_name?: string | null;
     bottom_name?: string | null;
+    dressId?: string | null;
+    dress_id?: string | null;
+    dress_name?: string | null;
     label?: string;
   };
 }
@@ -165,6 +171,7 @@ export interface WeekEventsRequest {
   events: {
     day: DayOfWeek;
     event_type: EventType;
+    original_summary?: string;
   }[];
 }
 
@@ -285,10 +292,12 @@ function mapWeekEvent(
 ): {
   day: DayOfWeek;
   event_type: EventType;
+  original_summary?: string;
 } {
   return {
     day: normalizeDay(event.day, fallback),
     event_type: normalizeEventType(event.event_type),
+    original_summary: event.original_summary,
   };
 }
 
@@ -300,6 +309,8 @@ function mapRecommendation(rec: RecommendationApi, index: number): DayRecommenda
   const bottomId = rec.bottom_id ?? rec.outfit?.bottomId ?? rec.outfit?.bottom_id ?? null;
   const topName = (rec.top_name || rec.outfit?.top_name || '').trim();
   const bottomName = (rec.bottom_name || rec.outfit?.bottom_name || '').trim();
+  const dressId = rec.dress_id ?? rec.outfit?.dressId ?? rec.outfit?.dress_id ?? null;
+  const dressName = (rec.dress_name || rec.outfit?.dress_name || '').trim() || null;
 
   return {
     day,
@@ -310,6 +321,8 @@ function mapRecommendation(rec: RecommendationApi, index: number): DayRecommenda
       bottomId,
       topName,
       bottomName,
+      dressId,
+      dressName,
       label: rec.outfit?.label,
     },
     explanation:

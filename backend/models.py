@@ -182,6 +182,9 @@ class WeekEvent(BaseModel):
     event_type: str
     """Informal label for the event, e.g. ``"work"``, ``"gym"``, ``"date"``."""
 
+    original_summary: Optional[str] = None
+    """The original Google Calendar event title, if available."""
+
     location: Optional[str] = None
     """Free-text location string, e.g. ``"New York, NY"``.
     Will be forwarded to the weather service once it is integrated."""
@@ -212,6 +215,8 @@ class DayOutfitSuggestion(BaseModel):
     bottom_id: Optional[str] = None
     top_name: Optional[str] = None
     bottom_name: Optional[str] = None
+    dress_id: Optional[str] = None
+    dress_name: Optional[str] = None
     explanation: str
 
 

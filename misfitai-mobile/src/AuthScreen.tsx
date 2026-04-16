@@ -43,9 +43,15 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
 ];
 
-const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
-const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
+const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined;
+const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined;
+const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || undefined;
+
+const hasGoogleClientId = !!(
+  (Platform.OS === 'web' && googleWebClientId) ||
+  (Platform.OS === 'ios' && googleIosClientId) ||
+  (Platform.OS === 'android' && googleAndroidClientId)
+);
 
 // When set, all web OAuth flows use this stable URL as the redirect URI instead
 // of window.location.origin. This lets Firebase Hosting preview channels (whose
@@ -64,20 +70,17 @@ export function AuthScreen({
   const [mode, setMode] = useState<AuthMode>('login');
   const [loadingProvider, setLoadingProvider] = useState<AuthProvider | null>(null);
 
+  // Pass a placeholder ID when unconfigured so the hook doesn't throw.
+  // The button is disabled via `googleConfigured` below.
   const [googleRequest, googleResponse, googlePromptAsync] = Google.useAuthRequest({
-    ...(googleWebClientId && { webClientId: googleWebClientId }),
+    webClientId: googleWebClientId ?? 'NOT_CONFIGURED',
     ...(googleIosClientId && { iosClientId: googleIosClientId }),
     ...(googleAndroidClientId && { androidClientId: googleAndroidClientId }),
     scopes: GOOGLE_SCOPES,
-    // Force the consent screen so Google always issues a token that covers all
-    // requested scopes, including calendar.readonly which was added after the
-    // initial sign-in. Without this, returning users keep their old token which
-    // lacks the calendar scope and receives a 403 from the Calendar API.
     prompt: 'consent',
-    // Override the redirect URI on web so all deployments (production and
-    // preview channels) funnel through the single registered production URL.
     ...(webRedirectUri && { redirectUri: webRedirectUri }),
   });
+  const googleConfigured = hasGoogleClientId;
 
   const entrance = useRef(new Animated.Value(0)).current;
 
@@ -253,13 +256,15 @@ export function AuthScreen({
 
           <Pressable
             onPress={handleGoogleAuth}
-            disabled={loadingProvider !== null || !googleRequest}
-            style={styles.providerButton}
+            disabled={loadingProvider !== null || !googleRequest || !googleConfigured}
+            style={[styles.providerButton, !googleConfigured && { opacity: 0.4 }]}
           >
             <Text style={styles.providerButtonText}>
-              {loadingProvider === 'google'
-                ? 'Connecting Google...'
-                : 'Continue with Google'}
+              {!googleConfigured
+                ? 'Google (client ID not configured)'
+                : loadingProvider === 'google'
+                  ? 'Connecting Google...'
+                  : 'Continue with Google'}
             </Text>
           </Pressable>
         </View>

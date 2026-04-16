@@ -53,6 +53,8 @@ _BOTTOM_SUBCATEGORIES: frozenset[str] = frozenset(
     }
 )
 
+_DRESS_CATEGORIES: frozenset[str] = frozenset({"dress"})
+
 # ---------------------------------------------------------------------------
 # Formality — per-event-type fallback chains.
 #
@@ -211,6 +213,13 @@ def _is_excluded_for_event(item: GarmentItem, event_type: str) -> bool:
     return False
 
 
+def _is_dress(item: GarmentItem) -> bool:
+    return (
+        item.category.value in _DRESS_CATEGORIES
+        or (item.sub_category is not None and item.sub_category.lower() in _DRESS_CATEGORIES)
+    )
+
+
 def _pick_garment(
     pool: list[GarmentItem],
     is_type_fn,  # callable: GarmentItem -> bool
@@ -362,28 +371,55 @@ async def generate_week_recommendations(
             user_size_label=user_size_label,
         )
 
-        explanation = await generate_outfit_explanation(
-            event.day, event.event_type, top, bottom
-        )
-
-        top_id = top.id if top else None
-        bottom_id = bottom.id if bottom else None
-
-        if top_id:
-            used_ids.add(top_id)
-        if bottom_id:
-            used_ids.add(bottom_id)
-
-        recommendations.append(
-            DayOutfitSuggestion(
-                day=event.day,
+        # If top or bottom is missing, try a dress as a fallback
+        dress = None
+        if top is None or bottom is None:
+            dress = _pick_garment(
+                wardrobe, _is_dress, formality_chain, used_ids,
                 event_type=event.event_type,
-                top_id=top_id,
-                bottom_id=bottom_id,
-                top_name=_display_name(top) or "No item found",
-                bottom_name=_display_name(bottom) or "No item found",
-                explanation=explanation,
+                user_size_label=user_size_label,
             )
-        )
+
+        if dress is not None and (top is None or bottom is None):
+            explanation = await generate_outfit_explanation(
+                event.day, event.event_type, dress, None
+            )
+            if dress.id:
+                used_ids.add(dress.id)
+            recommendations.append(
+                DayOutfitSuggestion(
+                    day=event.day,
+                    event_type=event.event_type,
+                    dress_id=dress.id,
+                    dress_name=_display_name(dress) or "No item found",
+                    top_name="No item found",
+                    bottom_name="No item found",
+                    explanation=explanation,
+                )
+            )
+        else:
+            explanation = await generate_outfit_explanation(
+                event.day, event.event_type, top, bottom
+            )
+
+            top_id = top.id if top else None
+            bottom_id = bottom.id if bottom else None
+
+            if top_id:
+                used_ids.add(top_id)
+            if bottom_id:
+                used_ids.add(bottom_id)
+
+            recommendations.append(
+                DayOutfitSuggestion(
+                    day=event.day,
+                    event_type=event.event_type,
+                    top_id=top_id,
+                    bottom_id=bottom_id,
+                    top_name=_display_name(top) or "No item found",
+                    bottom_name=_display_name(bottom) or "No item found",
+                    explanation=explanation,
+                )
+            )
 
     return recommendations

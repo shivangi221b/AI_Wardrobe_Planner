@@ -45,6 +45,7 @@ interface AppState {
   userId: string;
   garments: Garment[];
   eventsByDay: Record<DayOfWeek, EventType>;
+  summariesByDay: Record<DayOfWeek, string | undefined>;
   recommendations: DayRecommendation[];
   isCalendarConnected: boolean;
   isLoadingWardrobe: boolean;
@@ -100,6 +101,18 @@ function createInitialEvents(): Record<DayOfWeek, EventType> {
   };
 }
 
+function createInitialSummaries(): Record<DayOfWeek, string | undefined> {
+  return {
+    monday: undefined,
+    tuesday: undefined,
+    wednesday: undefined,
+    thursday: undefined,
+    friday: undefined,
+    saturday: undefined,
+    sunday: undefined,
+  };
+}
+
 export function AppStateProvider({
   children,
   userId: userIdProp,
@@ -118,6 +131,8 @@ export function AppStateProvider({
   const [isCalendarConnected, setIsCalendarConnected] = useState(false);
   const [eventsByDay, setEventsByDay] =
     useState<Record<DayOfWeek, EventType>>(createInitialEvents);
+  const [summariesByDay, setSummariesByDay] =
+    useState<Record<DayOfWeek, string | undefined>>(createInitialSummaries);
   const [recommendations, setRecommendations] = useState<
     DayRecommendation[]
   >([]);
@@ -191,6 +206,35 @@ export function AppStateProvider({
     };
   }, [userId]);
 
+  useEffect(() => {
+    if (!googleAccessToken || isCalendarConnected) return;
+    let cancelled = false;
+    apiSyncCalendarEvents(userId, googleAccessToken)
+      .then((result) => {
+        if (cancelled) return;
+        if (result.events.length > 0) {
+          const updated = createInitialEvents();
+          const updatedSummaries = createInitialSummaries();
+          result.events.forEach((event) => {
+            if (
+              dayOrder.includes(event.day) &&
+              validEventTypes.includes(event.event_type)
+            ) {
+              updated[event.day] = event.event_type;
+              updatedSummaries[event.day] = event.original_summary;
+            }
+          });
+          setEventsByDay(updated);
+          setSummariesByDay(updatedSummaries);
+        }
+        setIsCalendarConnected(true);
+      })
+      .catch(() => {
+        // Silently skip — user can still manually connect later.
+      });
+    return () => { cancelled = true; };
+  }, [googleAccessToken, userId, isCalendarConnected]);
+
   const setCalendarConnected = useCallback((connected: boolean) => {
     setIsCalendarConnected(connected);
   }, []);
@@ -226,15 +270,18 @@ export function AppStateProvider({
     }
     if (result.events.length > 0) {
       const updated = createInitialEvents();
+      const updatedSummaries = createInitialSummaries();
       result.events.forEach((event) => {
         if (
           dayOrder.includes(event.day) &&
           validEventTypes.includes(event.event_type)
         ) {
           updated[event.day] = event.event_type;
+          updatedSummaries[event.day] = event.original_summary;
         }
       });
       setEventsByDay(updated);
+      setSummariesByDay(updatedSummaries);
     }
   }, [userId, googleAccessToken]);
 
@@ -352,6 +399,7 @@ export function AppStateProvider({
       userId,
       garments,
       eventsByDay,
+      summariesByDay,
       recommendations,
       isCalendarConnected,
       isLoadingWardrobe,
@@ -376,6 +424,7 @@ export function AppStateProvider({
       userId,
       garments,
       eventsByDay,
+      summariesByDay,
       recommendations,
       isCalendarConnected,
       isLoadingWardrobe,

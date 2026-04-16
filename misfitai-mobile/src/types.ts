@@ -61,6 +61,7 @@ export interface CalendarEvent {
   id: string;
   day: DayOfWeek;
   eventType: EventType;
+  originalSummary?: string;
 }
 
 export interface Outfit {
@@ -69,6 +70,8 @@ export interface Outfit {
   bottomId: string | null;
   topName: string;
   bottomName: string;
+  dressId?: string | null;
+  dressName?: string | null;
   label?: string;
 }
 
