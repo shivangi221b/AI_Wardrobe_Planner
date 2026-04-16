@@ -500,12 +500,13 @@ def get_measurements(user_id: str) -> Optional[BodyMeasurements]:
             .table(_measurements_table_name())
             .select("*")
             .eq("user_id", user_id)
-            .maybe_single()
+            .limit(1)
             .execute()
         )
-        if not result.data:
+        rows = result.data or []
+        if not rows:
             return None
-        return _row_to_measurements(result.data)
+        return _row_to_measurements(rows[0])
     except Exception:
         logger.exception("get_measurements failed user_id=%s", user_id)
         return None
