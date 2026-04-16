@@ -184,7 +184,7 @@ function AppContent({
           {flowSteps.map((item, index) => {
             const active = tab === item.key;
             return (
-              <View key={item.key} style={styles.stepperSegment}>
+              <React.Fragment key={item.key}>
                 <Pressable style={styles.stepperPressable} onPress={() => handleTabChange(item.key)}>
                   <View
                     style={[
@@ -206,7 +206,7 @@ function AppContent({
                   <Text style={[styles.stepLabel, active && styles.stepLabelActive]}>{item.label}</Text>
                 </Pressable>
                 {index < flowSteps.length - 1 ? <View style={styles.stepConnector} /> : null}
-              </View>
+              </React.Fragment>
             );
           })}
         </View>
@@ -439,17 +439,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  stepperSegment: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
+    alignItems: 'flex-start',
   },
   stepperPressable: {
+    flex: 0,
     alignItems: 'center',
     gap: 4,
+    minWidth: 56,
   },
   stepBadge: {
     width: 24,
@@ -494,7 +490,8 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 1,
     backgroundColor: palette.line,
-    marginHorizontal: 6,
+    marginTop: 12,
+    marginHorizontal: 8,
   },
   stepHint: {
     color: palette.muted,
