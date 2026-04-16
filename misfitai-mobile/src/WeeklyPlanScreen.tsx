@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Image,
   Pressable,
@@ -48,7 +49,7 @@ export function WeeklyPlanScreen({
   onRegenerateWeek: () => Promise<void>;
   onNavigateToWardrobe?: () => void;
 }) {
-  const { garments, recommendations } = useAppState();
+  const { garments, recommendations, toggleGarmentHidden } = useAppState();
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('monday');
@@ -133,7 +134,12 @@ export function WeeklyPlanScreen({
   const topName = selectedRecommendation?.outfit.topName || topGarment?.name || '';
   const bottomName = selectedRecommendation?.outfit.bottomName || bottomGarment?.name || '';
 
-  type CollagePiece = { name: string; image: { uri: string } | ReturnType<typeof getImageForGarment> };
+  type CollagePiece = {
+    name: string;
+    image: { uri: string } | ReturnType<typeof getImageForGarment>;
+    garmentId?: string;
+    hidden?: boolean;
+  };
   const collagePieces: CollagePiece[] = [];
 
   const missingTop = !isDressOutfit && (!topName || isPlaceholderName(topName));
@@ -146,6 +152,8 @@ export function WeeklyPlanScreen({
       image: dressGarment?.primaryImageUrl
         ? { uri: dressGarment.primaryImageUrl }
         : getImageForGarment(dressName, 'dress'),
+      garmentId: dressGarment?.id,
+      hidden: dressGarment?.hiddenFromRecommendations,
     });
   } else {
     if (!missingTop) {
@@ -154,6 +162,8 @@ export function WeeklyPlanScreen({
         image: topGarment?.primaryImageUrl
           ? { uri: topGarment.primaryImageUrl }
           : getImageForGarment(topName, 'top'),
+        garmentId: topGarment?.id,
+        hidden: topGarment?.hiddenFromRecommendations,
       });
     }
     if (!missingBottom) {
@@ -162,6 +172,8 @@ export function WeeklyPlanScreen({
         image: bottomGarment?.primaryImageUrl
           ? { uri: bottomGarment.primaryImageUrl }
           : getImageForGarment(bottomName, 'bottom'),
+        garmentId: bottomGarment?.id,
+        hidden: bottomGarment?.hiddenFromRecommendations,
       });
     }
   }
@@ -171,6 +183,8 @@ export function WeeklyPlanScreen({
       image: outerwearGarment.primaryImageUrl
         ? { uri: outerwearGarment.primaryImageUrl }
         : getImageForGarment(outerwearGarment.name, 'outerwear'),
+      garmentId: outerwearGarment.id,
+      hidden: outerwearGarment.hiddenFromRecommendations,
     });
   }
   if (shoesGarment) {
@@ -179,8 +193,34 @@ export function WeeklyPlanScreen({
       image: shoesGarment.primaryImageUrl
         ? { uri: shoesGarment.primaryImageUrl }
         : getImageForGarment(shoesGarment.name, 'shoes'),
+      garmentId: shoesGarment.id,
+      hidden: shoesGarment.hiddenFromRecommendations,
     });
   }
+
+  const handlePieceLongPress = (piece: CollagePiece) => {
+    if (!piece.garmentId) return;
+    const action = piece.hidden ? 'Unhide' : 'Hide';
+    Alert.alert(
+      `${action} from recommendations?`,
+      piece.hidden
+        ? `"${piece.name}" will appear in future recommendations again.`
+        : `"${piece.name}" will no longer be suggested in outfit recommendations.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: action,
+          style: piece.hidden ? 'default' : 'destructive',
+          onPress: () => {
+            toggleGarmentHidden(piece.garmentId!, !piece.hidden).catch(() => {
+              Alert.alert('Error', 'Could not update garment visibility. Please try again.');
+            });
+          },
+        },
+      ]
+    );
+  };
+
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -243,6 +283,7 @@ export function WeeklyPlanScreen({
                       key={`${piece.name}-${index}`}
                       style={[
                         styles.pieceCard,
+                        piece.hidden && styles.pieceCardHidden,
                         {
                           opacity: pieceAnim,
                           transform: [
@@ -256,8 +297,17 @@ export function WeeklyPlanScreen({
                         },
                       ]}
                     >
-                      <Image source={piece.image} style={styles.pieceImage} resizeMode="contain" />
-                      <Text style={styles.pieceLabel}>{piece.name}</Text>
+                      <Pressable
+                        onLongPress={() => handlePieceLongPress(piece)}
+                        delayLongPress={400}
+                        style={styles.piecePressable}
+                      >
+                        <Image source={piece.image} style={styles.pieceImage} resizeMode="contain" />
+                        <Text style={styles.pieceLabel}>{piece.name}</Text>
+                        {piece.hidden ? (
+                          <Text style={styles.pieceHiddenBadge}>Hidden</Text>
+                        ) : null}
+                      </Pressable>
                     </Animated.View>
                   );
                 })}
@@ -413,6 +463,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.line,
     backgroundColor: palette.panelStrong,
+    overflow: 'hidden',
+  },
+  pieceCardHidden: {
+    opacity: 0.45,
+    borderStyle: 'dashed',
+    borderColor: palette.lineStrong,
+  },
+  piecePressable: {
     padding: 10,
     alignItems: 'center',
   },
@@ -426,6 +484,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     fontFamily: type.bodyDemi,
+  },
+  pieceHiddenBadge: {
+    marginTop: 4,
+    color: palette.muted,
+    fontSize: 10,
+    fontFamily: type.bodyDemi,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   missingItemsBanner: {
     borderRadius: radius.lg,

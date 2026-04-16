@@ -7,6 +7,7 @@ import React, {
   useState,
 } from 'react';
 import type {
+  BodyMeasurements,
   CalendarEvent,
   DayOfWeek,
   DayRecommendation,
@@ -22,11 +23,15 @@ import {
   commitVisionItems as apiCommitVisionItems,
   confirmSearchAdd,
   getApiErrorMessage,
+  getMeasurements,
   getWardrobe,
   getWeekEvents,
   getWeeklyRecommendations,
   previewGarmentsFromVision as apiPreviewGarmentsFromVision,
+  saveMeasurements,
   searchGarmentImages,
+  deleteGarment as apiDeleteGarment,
+  setGarmentHidden as apiSetGarmentHidden,
   syncCalendarEvents as apiSyncCalendarEvents,
   type ConfirmSearchAddPayload,
   type GarmentSearchResult,
@@ -45,6 +50,7 @@ interface AppState {
   isCalendarConnected: boolean;
   isLoadingWardrobe: boolean;
   wardrobeError: string | null;
+  measurements: BodyMeasurements | null;
   searchGarmentCandidates: (
     query: string,
     limit?: number,
@@ -68,6 +74,9 @@ interface AppState {
   previewVisionItems: (payload: VisionAddPayload) => Promise<VisionPreviewItem[]>;
   commitVisionItems: (items: VisionPreviewItem[]) => Promise<void>;
   addGarmentViaSearch: (payload: ConfirmSearchAddPayload) => Promise<void>;
+  toggleGarmentHidden: (garmentId: string, hidden: boolean) => Promise<void>;
+  deleteGarmentFromWardrobe: (garmentId: string) => Promise<void>;
+  updateMeasurements: (data: Omit<BodyMeasurements, 'userId' | 'updatedAt'>) => Promise<void>;
 }
 
 const AppStateContext = createContext<AppState | undefined>(undefined);
@@ -107,11 +116,14 @@ function createInitialSummaries(): Record<DayOfWeek, string | undefined> {
 export function AppStateProvider({
   children,
   userId: userIdProp,
+  userGender,
   googleAccessToken,
 }: {
   children: React.ReactNode;
   /** Stable user id from auth (e.g. Google/Apple id or email). Used for wardrobe API and Supabase. */
   userId?: string;
+  /** Gender from user profile, forwarded to the recommendation engine. */
+  userGender?: string | null;
   /** Google OAuth access token from sign-in (in-memory only, not persisted). Used for calendar sync. */
   googleAccessToken?: string | null;
 }) {
@@ -126,6 +138,7 @@ export function AppStateProvider({
   >([]);
   const [isLoadingWardrobe, setIsLoadingWardrobe] = useState(false);
   const [wardrobeError, setWardrobeError] = useState<string | null>(null);
+  const [measurements, setMeasurements] = useState<BodyMeasurements | null>(null);
   const [userId, setUserId] = useState<string>(
     () => userIdProp ?? `demo-${Math.random().toString(36).slice(2, 8)}`
   );
@@ -170,6 +183,15 @@ export function AppStateProvider({
         }
       } catch {
         // Week events are non-blocking for first render.
+      }
+
+      try {
+        const savedMeasurements = await getMeasurements(userId);
+        if (!cancelled) {
+          setMeasurements(savedMeasurements);
+        }
+      } catch {
+        // Measurements are non-blocking.
       } finally {
         if (!cancelled) {
           setIsLoadingWardrobe(false);
@@ -270,13 +292,13 @@ export function AppStateProvider({
       eventType: eventsByDay[day],
     }));
     await saveWeekEvents(userId, events);
-    const response = await getWeeklyRecommendations(userId, events);
+    const response = await getWeeklyRecommendations(userId, events, userGender);
     setRecommendations(
       response.recommendations.sort(
         (a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day)
       )
     );
-  }, [userId, eventsByDay]);
+  }, [userId, eventsByDay, userGender]);
 
   const addGarmentToWardrobe = useCallback(async (payload: {
     name: string;
@@ -346,6 +368,32 @@ export function AppStateProvider({
     [userId]
   );
 
+  const toggleGarmentHidden = useCallback(
+    async (garmentId: string, hidden: boolean): Promise<void> => {
+      const updated = await apiSetGarmentHidden(userId, garmentId, hidden);
+      setGarments((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item))
+      );
+    },
+    [userId]
+  );
+
+  const deleteGarmentFromWardrobe = useCallback(
+    async (garmentId: string): Promise<void> => {
+      await apiDeleteGarment(userId, garmentId);
+      setGarments((current) => current.filter((g) => g.id !== garmentId));
+    },
+    [userId]
+  );
+
+  const updateMeasurements = useCallback(
+    async (data: Omit<BodyMeasurements, 'userId' | 'updatedAt'>): Promise<void> => {
+      const saved = await saveMeasurements(userId, data);
+      setMeasurements(saved);
+    },
+    [userId]
+  );
+
   const value: AppState = useMemo(
     () => ({
       userId,
@@ -356,6 +404,7 @@ export function AppStateProvider({
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
+      measurements,
       searchGarmentCandidates,
       setCalendarConnected,
       setEventForDay,
@@ -367,6 +416,9 @@ export function AppStateProvider({
       previewVisionItems,
       commitVisionItems,
       addGarmentViaSearch,
+      toggleGarmentHidden,
+      deleteGarmentFromWardrobe,
+      updateMeasurements,
     }),
     [
       userId,
@@ -377,6 +429,7 @@ export function AppStateProvider({
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
+      measurements,
       searchGarmentCandidates,
       setCalendarConnected,
       setEventForDay,
@@ -388,6 +441,9 @@ export function AppStateProvider({
       previewVisionItems,
       commitVisionItems,
       addGarmentViaSearch,
+      toggleGarmentHidden,
+      deleteGarmentFromWardrobe,
+      updateMeasurements,
     ]
   );
 

@@ -1,7 +1,7 @@
 """
 recommendation.py — Outfit recommendation engine.
 
-Garment selection is rules-based (formality matching + priority fallback).
+Garment selection is rules-based (formality chains + context filtering).
 Explanation generation is delegated to the LLM via ``backend.llm``.
 
 Deliberately free of FastAPI imports so it can be unit-tested in isolation.
@@ -14,36 +14,161 @@ from __future__ import annotations
 from typing import Optional
 
 from .llm import generate_outfit_explanation
-from .models import DayOutfitSuggestion, GarmentItem, WeekEvent
+from .models import BodyMeasurements, DayOutfitSuggestion, GarmentItem, WeekEvent
 
 # ---------------------------------------------------------------------------
 # Category sets — checked against both category.value and sub_category
 # ---------------------------------------------------------------------------
 
 _TOP_CATEGORIES: frozenset[str] = frozenset(
-    {"top", "shirt", "blouse", "sweater", "jacket", "activewear_top"}
+    {
+        "top", "shirt", "blouse", "sweater", "t-shirt",
+        "jacket", "activewear_top",
+        "blazer", "vest", "halter_neck", "crop_top", "cardigan",
+    }
 )
 
 _BOTTOM_CATEGORIES: frozenset[str] = frozenset(
-    {"bottom", "pants", "jeans", "skirt", "activewear_bottom"}
+    {
+        "bottom", "pants", "jeans", "skirt", "activewear_bottom",
+        "trousers", "shorts", "leggings", "culottes",
+    }
+)
+
+# Explicit allowlists used to reject cross-category sub_category values.
+_TOP_SUBCATEGORIES: frozenset[str] = frozenset(
+    {
+        "shirt", "blouse", "sweater", "t-shirt", "tank_top",
+        "blazer", "vest", "jacket", "halter_neck", "activewear_top",
+        "crop_top", "cardigan", "bodysuit", "hoodie", "polo",
+        "turtleneck", "henley", "flannel", "sweatshirt",
+    }
+)
+
+_BOTTOM_SUBCATEGORIES: frozenset[str] = frozenset(
+    {
+        "pants", "jeans", "trousers", "skirt", "shorts",
+        "leggings", "activewear_bottom", "culottes", "chinos",
+        "sweatpants", "cargo pants", "dress pants", "wide-leg pants",
+    }
 )
 
 _DRESS_CATEGORIES: frozenset[str] = frozenset({"dress"})
 
 # ---------------------------------------------------------------------------
-# Formality preferences per event type
-# "business" is treated as equivalent to "formal" for work contexts.
-# Unknown event types fall back to casual.
+# Formality — per-event-type fallback chains.
+#
+# Each chain is a list of formality tiers tried in order.  The engine stops
+# at the first tier that yields a match.  If no tier matches the event gets
+# None rather than a contextually inappropriate item.
 # ---------------------------------------------------------------------------
 
-_EVENT_FORMALITY: dict[str, frozenset[str]] = {
-    "work_meeting": frozenset({"formal", "business"}),
-    "date_night": frozenset({"smart_casual"}),
-    "gym": frozenset({"casual"}),
-    "casual": frozenset({"casual"}),
+_FORMALITY_FALLBACK_CHAINS: dict[str, list[frozenset[str]]] = {
+    "work_meeting": [
+        frozenset({"formal", "business"}),
+        frozenset({"smart_casual"}),
+        # No casual fallback — a tank top at a work meeting erodes trust.
+    ],
+    "date_night": [
+        frozenset({"smart_casual"}),
+        frozenset({"formal", "business"}),
+        frozenset({"casual"}),
+    ],
+    "gym": [
+        frozenset({"casual"}),
+    ],
+    "casual": [
+        frozenset({"casual"}),
+        frozenset({"smart_casual"}),
+    ],
 }
 
-_FALLBACK_FORMALITY: frozenset[str] = frozenset({"casual"})
+_FALLBACK_FORMALITY_CHAIN: list[frozenset[str]] = [
+    frozenset({"casual"}),
+    frozenset({"smart_casual"}),
+]
+
+# ---------------------------------------------------------------------------
+# Sub-categories that are always excluded for specific event types.
+# Checked against item.sub_category after normalization.
+# ---------------------------------------------------------------------------
+
+_EXCLUDED_SUBCATEGORIES_BY_EVENT: dict[str, frozenset[str]] = {
+    "work_meeting": frozenset(
+        {"tank_top", "crop_top", "graphic_tee", "halter_neck", "bodysuit", "hoodie"}
+    ),
+}
+
+
+def _normalize_sub_category(value: str) -> str:
+    """Normalize a sub_category string for comparison.
+
+    Converts user-entered free-form values (e.g. ``"Tank top"``, ``"Crop-top"``)
+    to the snake_case form used in the blocklists and allowlists
+    (e.g. ``"tank_top"``, ``"crop_top"``).
+    """
+    import re
+    return re.sub(r"[\s\-]+", "_", value.strip().lower())
+
+# ---------------------------------------------------------------------------
+# Size-band mapping — used to prefer items that are likely to fit.
+# Keys are normalised size strings; value is the set of equivalent labels.
+# ---------------------------------------------------------------------------
+
+_SIZE_BANDS: list[frozenset[str]] = [
+    frozenset({"xxs", "00", "0"}),
+    frozenset({"xs", "2", "4", "6"}),
+    frozenset({"s", "small", "8", "10"}),
+    frozenset({"m", "medium", "12", "14"}),
+    frozenset({"l", "large", "16", "18"}),
+    frozenset({"xl", "x-large", "20", "22"}),
+    frozenset({"xxl", "2xl", "24", "26"}),
+    frozenset({"xxxl", "3xl", "28", "30"}),
+]
+
+
+def _derive_size_label(measurements: BodyMeasurements) -> Optional[str]:
+    """
+    Derive a generic size label (e.g. ``"s"`` / ``"m"`` / ``"l"``) from the
+    largest available measurement.  Returns ``None`` when no measurements are set.
+
+    Uses UK/EU women's sizing as a heuristic reference — close enough for
+    soft preferential ranking (not strict exclusion).
+    """
+    # Prefer bust / chest measurement; fall back to waist.
+    ref = measurements.chest_cm or measurements.waist_cm
+    if ref is None:
+        return None
+    if ref <= 82:
+        return "xs"
+    if ref <= 86:
+        return "s"
+    if ref <= 90:
+        return "m"
+    if ref <= 96:
+        return "l"
+    if ref <= 104:
+        return "xl"
+    return "xxl"
+
+
+def _size_band_index(label: str) -> int:
+    """Return the band index for *label*, or -1 if not found."""
+    norm = label.strip().lower()
+    for i, band in enumerate(_SIZE_BANDS):
+        if norm in band:
+            return i
+    return -1
+
+
+def _size_matches(item: GarmentItem, user_size_label: str) -> bool:
+    """True if the item's size is in the same band as the user's size label."""
+    if not item.size:
+        return False
+    item_band = _size_band_index(item.size)
+    user_band = _size_band_index(user_size_label)
+    return item_band != -1 and user_band != -1 and item_band == user_band
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -51,17 +176,41 @@ _FALLBACK_FORMALITY: frozenset[str] = frozenset({"casual"})
 
 
 def _is_top(item: GarmentItem) -> bool:
-    return (
+    norm_sub = _normalize_sub_category(item.sub_category) if item.sub_category else None
+    cat_matches = (
         item.category.value in _TOP_CATEGORIES
-        or (item.sub_category is not None and item.sub_category.lower() in _TOP_CATEGORIES)
+        or (norm_sub is not None and norm_sub in _TOP_CATEGORIES)
     )
+    if not cat_matches:
+        return False
+    # Reject items whose sub_category belongs exclusively to the bottom slot.
+    if norm_sub and norm_sub in _BOTTOM_SUBCATEGORIES:
+        return False
+    return True
 
 
 def _is_bottom(item: GarmentItem) -> bool:
-    return (
+    norm_sub = _normalize_sub_category(item.sub_category) if item.sub_category else None
+    cat_matches = (
         item.category.value in _BOTTOM_CATEGORIES
-        or (item.sub_category is not None and item.sub_category.lower() in _BOTTOM_CATEGORIES)
+        or (norm_sub is not None and norm_sub in _BOTTOM_CATEGORIES)
     )
+    if not cat_matches:
+        return False
+    # Reject items whose sub_category belongs exclusively to the top slot.
+    if norm_sub and norm_sub in _TOP_SUBCATEGORIES:
+        return False
+    return True
+
+
+def _is_excluded_for_event(item: GarmentItem, event_type: str) -> bool:
+    """Return True if the item's sub_category is on the exclusion list for *event_type*."""
+    blocklist = _EXCLUDED_SUBCATEGORIES_BY_EVENT.get(event_type)
+    if not blocklist:
+        return False
+    if item.sub_category and _normalize_sub_category(item.sub_category) in blocklist:
+        return True
+    return False
 
 
 def _is_dress(item: GarmentItem) -> bool:
@@ -74,39 +223,70 @@ def _is_dress(item: GarmentItem) -> bool:
 def _pick_garment(
     pool: list[GarmentItem],
     is_type_fn,  # callable: GarmentItem -> bool
-    preferred_formalities: frozenset[str],
+    formality_chain: list[frozenset[str]],
     used_ids: set[str],
+    event_type: str = "",
+    user_size_label: Optional[str] = None,
 ) -> Optional[GarmentItem]:
     """
-    Select the best garment from *pool* for the given type and formality.
+    Select the best garment from *pool* for the given type, formality chain,
+    and optional size preference.
 
-    Selection priority:
-      1. Unused garment matching category + preferred formality
-      2. Unused garment matching category only (formality fallback)
-      3. Already-used garment matching category + preferred formality
-      4. Already-used garment matching category only
-      5. None — category not present in wardrobe at all
+    Selection priority (per formality tier, in chain order):
+      For each tier:
+        1. Unused, size-matched, event-appropriate
+        2. Unused, event-appropriate (no size match required)
+        3. Already-used, size-matched, event-appropriate
+        4. Already-used, event-appropriate
+      After exhausting all explicit tiers:
+        5. Garments with formality=None (untagged) — treated as last resort
+           so existing vision-ingested items without a formality value are
+           never silently dropped.
+      Final fallback:
+        6. None — no appropriate garment found
     """
-    matching_category = [g for g in pool if is_type_fn(g)]
-    if not matching_category:
+    candidates = [
+        g for g in pool
+        if is_type_fn(g) and not g.hidden_from_recommendations and not _is_excluded_for_event(g, event_type)
+    ]
+    if not candidates:
         return None
 
-    def formality_matches(g: GarmentItem) -> bool:
-        return g.formality is not None and g.formality.value in preferred_formalities
+    # Sort by times_recommended ascending to promote variety across generations.
+    candidates.sort(key=lambda g: g.times_recommended)
 
-    unused = [g for g in matching_category if g.id not in used_ids]
-    used = [g for g in matching_category if g.id in used_ids]
+    def formality_matches(g: GarmentItem, tier: frozenset[str]) -> bool:
+        return g.formality is not None and g.formality.value in tier
 
-    unused_formal = [g for g in unused if formality_matches(g)]
-    if unused_formal:
-        return unused_formal[0]
-    if unused:
-        return unused[0]
+    def _pick_from(subset: list[GarmentItem]) -> Optional[GarmentItem]:
+        """Return the best item from *subset* applying size preference."""
+        if not subset:
+            return None
+        unused = [g for g in subset if g.id not in used_ids]
+        in_use = [g for g in subset if g.id in used_ids]
+        if user_size_label:
+            unused_sized = [g for g in unused if _size_matches(g, user_size_label)]
+            if unused_sized:
+                return unused_sized[0]
+        if unused:
+            return unused[0]
+        if user_size_label:
+            used_sized = [g for g in in_use if _size_matches(g, user_size_label)]
+            if used_sized:
+                return used_sized[0]
+        return in_use[0] if in_use else None
 
-    used_formal = [g for g in used if formality_matches(g)]
-    if used_formal:
-        return used_formal[0]
-    return used[0]
+    for tier in formality_chain:
+        tier_candidates = [g for g in candidates if formality_matches(g, tier)]
+        result = _pick_from(tier_candidates)
+        if result is not None:
+            return result
+
+    # Fallback: items whose formality was never set (e.g. vision-ingested with
+    # no recognized formality label).  These are treated as context-neutral
+    # rather than excluded outright.
+    untagged = [g for g in candidates if g.formality is None]
+    return _pick_from(untagged)
 
 
 def _display_name(item: Optional[GarmentItem]) -> Optional[str]:
@@ -127,6 +307,8 @@ def _display_name(item: Optional[GarmentItem]) -> Optional[str]:
 async def generate_week_recommendations(
     wardrobe: list[GarmentItem],
     events: list[WeekEvent],
+    user_gender: Optional[str] = None,
+    measurements: Optional[BodyMeasurements] = None,
 ) -> list[DayOutfitSuggestion]:
     """
     Generate one :class:`DayOutfitSuggestion` per event in *events*.
@@ -135,27 +317,68 @@ async def generate_week_recommendations(
     LLM (with garment images forwarded when available).
 
     Args:
-        wardrobe: All garments belonging to the user. May be empty.
-        events:   The user's week plan. Each entry describes one day.
+        wardrobe:     All garments belonging to the user. May be empty.
+        events:       The user's week plan. Each entry describes one day.
+        user_gender:  Optional gender string (``"male"``, ``"female"``, ``"other"``).
+                      When set, garments tagged for the opposite binary gender are
+                      excluded before selection begins.
+        measurements: Optional body measurements used for soft size-band scoring.
 
     Returns:
         A list of :class:`DayOutfitSuggestion` objects in the same order as
         *events*.  Never raises — edge cases (empty wardrobe, unknown event
         type, missing category, LLM failure) produce graceful responses.
     """
+    # --- 1. Gender pre-filter ---
+    if user_gender:
+        # Map user-facing gender strings to the garment gender enum values.
+        _USER_TO_GARMENT_GENDER = {
+            "male": "men",
+            "female": "women",
+        }
+        target = _USER_TO_GARMENT_GENDER.get(user_gender.lower())
+        opposite = {"men": "women", "women": "men"}.get(target or "") if target else None
+        if opposite:
+            wardrobe = [
+                g for g in wardrobe
+                if g.gender is None or g.gender.value != opposite
+            ]
+
+    # --- 2. Hidden-item pre-filter ---
+    wardrobe = [g for g in wardrobe if not g.hidden_from_recommendations]
+
+    # --- 3. Derive user size label for soft scoring ---
+    user_size_label: Optional[str] = None
+    if measurements:
+        user_size_label = _derive_size_label(measurements)
+
     used_ids: set[str] = set()
     recommendations: list[DayOutfitSuggestion] = []
 
     for event in events:
-        preferred = _EVENT_FORMALITY.get(event.event_type, _FALLBACK_FORMALITY)
+        formality_chain = _FORMALITY_FALLBACK_CHAINS.get(
+            event.event_type, _FALLBACK_FORMALITY_CHAIN
+        )
 
-        top = _pick_garment(wardrobe, _is_top, preferred, used_ids)
-        bottom = _pick_garment(wardrobe, _is_bottom, preferred, used_ids)
+        top = _pick_garment(
+            wardrobe, _is_top, formality_chain, used_ids,
+            event_type=event.event_type,
+            user_size_label=user_size_label,
+        )
+        bottom = _pick_garment(
+            wardrobe, _is_bottom, formality_chain, used_ids,
+            event_type=event.event_type,
+            user_size_label=user_size_label,
+        )
 
         # If top or bottom is missing, try a dress as a fallback
         dress = None
         if top is None or bottom is None:
-            dress = _pick_garment(wardrobe, _is_dress, preferred, used_ids)
+            dress = _pick_garment(
+                wardrobe, _is_dress, formality_chain, used_ids,
+                event_type=event.event_type,
+                user_size_label=user_size_label,
+            )
 
         if dress is not None and (top is None or bottom is None):
             explanation = await generate_outfit_explanation(
