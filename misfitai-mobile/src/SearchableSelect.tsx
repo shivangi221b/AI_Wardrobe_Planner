@@ -165,7 +165,7 @@ export function SearchableSelect({
                     <Text style={styles.otherCancelText}>Back</Text>
                   </Pressable>
                   <Pressable style={styles.otherApply} onPress={applyOther}>
-                    <Text style={styles.otherApplyText}>Add to Wardrobe</Text>
+                    <Text style={styles.otherApplyText}>Apply</Text>
                   </Pressable>
                 </View>
               </View>
