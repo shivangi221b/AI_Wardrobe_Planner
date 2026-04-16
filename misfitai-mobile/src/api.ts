@@ -636,7 +636,18 @@ function getVisionUploadFileName(payload: VisionAddPayload): string {
   if (payload.fileName?.trim()) {
     return payload.fileName.trim();
   }
-  const extension = payload.mimeType?.includes('png') ? 'png' : 'jpg';
+  const normalizedMimeType = payload.mimeType?.trim().toLowerCase();
+  let extension = 'jpg';
+  if (normalizedMimeType === 'image/png') {
+    extension = 'png';
+  } else if (
+    normalizedMimeType === 'image/jpeg' ||
+    normalizedMimeType === 'image/jpg'
+  ) {
+    extension = 'jpg';
+  } else if (normalizedMimeType === 'image/webp') {
+    extension = 'webp';
+  }
   return `wardrobe-upload-${Date.now()}.${extension}`;
 }
 
