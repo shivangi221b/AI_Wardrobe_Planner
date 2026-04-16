@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 
 from vision.extractor import ExtractedGarmentAsset, extract_garments_from_image
 
-from .db import get_measurements, insert_garment, set_garment_hidden, upsert_measurements
+from .db import delete_garment, get_measurements, insert_garment, set_garment_hidden, upsert_measurements
 from .models import (
     BodyMeasurements,
     GarmentCategory,
@@ -563,3 +563,11 @@ def patch_garment_hidden(user_id: str, garment_id: str, body: HideGarmentBody) -
     if updated is None:
         raise HTTPException(status_code=404, detail=f"Garment {garment_id} not found.")
     return updated
+
+
+@app.delete("/wardrobe/{user_id}/{garment_id}", status_code=204)
+def delete_wardrobe_item(user_id: str, garment_id: str) -> None:
+    """Permanently remove a garment from the user's wardrobe."""
+    found = delete_garment(garment_id, user_id)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Garment {garment_id} not found.")

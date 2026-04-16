@@ -903,6 +903,25 @@ export async function setGarmentHidden(
   return mapGarment(response);
 }
 
+// ---------------------------------------------------------------------------
+// Delete garment
+// ---------------------------------------------------------------------------
+
+export async function deleteGarment(userId: string, garmentId: string): Promise<void> {
+  if (USE_MOCK_API) {
+    const wardrobe = getOrCreateMockWardrobe(userId);
+    const idx = wardrobe.findIndex((g) => g.id === garmentId);
+    if (idx !== -1) {
+      wardrobe.splice(idx, 1);
+    }
+    return;
+  }
+  await requestJson<void>(
+    `/wardrobe/${encodeURIComponent(userId)}/${encodeURIComponent(garmentId)}`,
+    { method: 'DELETE' }
+  );
+}
+
 export async function syncCalendarEvents(
   userId: string,
   googleAccessToken: string

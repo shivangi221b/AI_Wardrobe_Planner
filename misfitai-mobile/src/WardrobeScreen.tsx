@@ -57,6 +57,7 @@ export function WardrobeScreen({
     commitVisionItems,
     addGarmentViaSearch,
     searchGarmentCandidates,
+    deleteGarmentFromWardrobe,
   } = useAppState();
 
   const [name, setName] = useState('');
@@ -1036,7 +1037,7 @@ export function WardrobeScreen({
                 wardrobeFilter === 'all' ? true : garment.category === wardrobeFilter
               )
               .map((garment) => (
-                <View key={garment.id} style={styles.card}>
+                <View key={garment.id} style={[styles.card, { position: 'relative' }]}>
                   <Pressable
                     onPress={() => {
                       if (garment.primaryImageUrl) {
@@ -1081,6 +1082,15 @@ export function WardrobeScreen({
                       );
                     })()}
                   </View>
+                  <Pressable
+                    onPress={() => deleteGarmentFromWardrobe(garment.id)}
+                    style={styles.cardDeleteBtn}
+                    hitSlop={8}
+                    accessibilityLabel="Delete garment"
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.cardDeleteBtnText}>×</Text>
+                  </Pressable>
                 </View>
               ))}
 
@@ -1252,6 +1262,23 @@ const styles = StyleSheet.create({
   cardBody: {
     flex: 1,
     justifyContent: 'center',
+  },
+  cardDeleteBtn: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: palette.panelStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardDeleteBtnText: {
+    color: palette.muted,
+    fontSize: 16,
+    lineHeight: 20,
+    fontFamily: type.body,
   },
   cardTitle: {
     color: palette.ink,

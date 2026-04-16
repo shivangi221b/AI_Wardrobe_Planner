@@ -30,6 +30,7 @@ import {
   previewGarmentsFromVision as apiPreviewGarmentsFromVision,
   saveMeasurements,
   searchGarmentImages,
+  deleteGarment as apiDeleteGarment,
   setGarmentHidden as apiSetGarmentHidden,
   syncCalendarEvents as apiSyncCalendarEvents,
   type ConfirmSearchAddPayload,
@@ -73,6 +74,7 @@ interface AppState {
   commitVisionItems: (items: VisionPreviewItem[]) => Promise<void>;
   addGarmentViaSearch: (payload: ConfirmSearchAddPayload) => Promise<void>;
   toggleGarmentHidden: (garmentId: string, hidden: boolean) => Promise<void>;
+  deleteGarmentFromWardrobe: (garmentId: string) => Promise<void>;
   updateMeasurements: (data: Omit<BodyMeasurements, 'userId' | 'updatedAt'>) => Promise<void>;
 }
 
@@ -329,6 +331,14 @@ export function AppStateProvider({
     [userId]
   );
 
+  const deleteGarmentFromWardrobe = useCallback(
+    async (garmentId: string): Promise<void> => {
+      await apiDeleteGarment(userId, garmentId);
+      setGarments((current) => current.filter((g) => g.id !== garmentId));
+    },
+    [userId]
+  );
+
   const updateMeasurements = useCallback(
     async (data: Omit<BodyMeasurements, 'userId' | 'updatedAt'>): Promise<void> => {
       const saved = await saveMeasurements(userId, data);
@@ -359,6 +369,7 @@ export function AppStateProvider({
       commitVisionItems,
       addGarmentViaSearch,
       toggleGarmentHidden,
+      deleteGarmentFromWardrobe,
       updateMeasurements,
     }),
     [
@@ -382,6 +393,7 @@ export function AppStateProvider({
       commitVisionItems,
       addGarmentViaSearch,
       toggleGarmentHidden,
+      deleteGarmentFromWardrobe,
       updateMeasurements,
     ]
   );
