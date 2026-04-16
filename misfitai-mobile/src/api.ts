@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { dayLabels, dayOrder, eventTypeLabels } from './constants';
 import type {
+  BodyMeasurements,
   CalendarEvent,
   DayOfWeek,
   DayRecommendation,
@@ -8,6 +9,7 @@ import type {
   Garment,
   GarmentCategory,
   GarmentFormality,
+  GarmentGender,
   GarmentSeasonality,
 } from './types';
 
@@ -56,6 +58,15 @@ const validFormalities: GarmentFormality[] = ['casual', 'smart_casual', 'busines
 
 const validSeasonalities: GarmentSeasonality[] = ['hot', 'mild', 'cold', 'all_season'];
 
+const validGarmentGenders: GarmentGender[] = ['men', 'women', 'unisex'];
+
+function normalizeGarmentGender(value?: string | null): GarmentGender | null {
+  if (value && validGarmentGenders.includes(value as GarmentGender)) {
+    return value as GarmentGender;
+  }
+  return null;
+}
+
 interface WardrobeApiItem {
   id: string;
   user_id?: string;
@@ -71,12 +82,16 @@ interface WardrobeApiItem {
   formality?: string | null;
   seasonality?: string | null;
   primary_image_url?: string;
+  gender?: string | null;
+  times_recommended?: number | null;
+  hidden_from_recommendations?: boolean | null;
   tags?: string[] | null;
 }
 
 interface WeekEventApi {
   day: string;
   event_type: string;
+  original_summary?: string;
 }
 
 interface RecommendationApi {
@@ -86,6 +101,8 @@ interface RecommendationApi {
   bottom_id?: string | null;
   top_name?: string | null;
   bottom_name?: string | null;
+  dress_id?: string | null;
+  dress_name?: string | null;
   explanation?: string;
   outfit?: {
     id?: string;
@@ -95,6 +112,9 @@ interface RecommendationApi {
     bottom_id?: string | null;
     top_name?: string | null;
     bottom_name?: string | null;
+    dressId?: string | null;
+    dress_id?: string | null;
+    dress_name?: string | null;
     label?: string;
   };
 }
@@ -151,6 +171,7 @@ export interface WeekEventsRequest {
   events: {
     day: DayOfWeek;
     event_type: EventType;
+    original_summary?: string;
   }[];
 }
 
@@ -254,6 +275,9 @@ function mapGarment(item: WardrobeApiItem): Garment {
     pattern: item.pattern?.trim() || undefined,
     material: item.material?.trim() || undefined,
     fitNotes: item.fit_notes?.trim() || undefined,
+    gender: normalizeGarmentGender(item.gender),
+    timesRecommended: item.times_recommended ?? 0,
+    hiddenFromRecommendations: item.hidden_from_recommendations ?? false,
     tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
   };
 }
@@ -268,10 +292,12 @@ function mapWeekEvent(
 ): {
   day: DayOfWeek;
   event_type: EventType;
+  original_summary?: string;
 } {
   return {
     day: normalizeDay(event.day, fallback),
     event_type: normalizeEventType(event.event_type),
+    original_summary: event.original_summary,
   };
 }
 
@@ -283,6 +309,8 @@ function mapRecommendation(rec: RecommendationApi, index: number): DayRecommenda
   const bottomId = rec.bottom_id ?? rec.outfit?.bottomId ?? rec.outfit?.bottom_id ?? null;
   const topName = (rec.top_name || rec.outfit?.top_name || '').trim();
   const bottomName = (rec.bottom_name || rec.outfit?.bottom_name || '').trim();
+  const dressId = rec.dress_id ?? rec.outfit?.dressId ?? rec.outfit?.dress_id ?? null;
+  const dressName = (rec.dress_name || rec.outfit?.dress_name || '').trim() || null;
 
   return {
     day,
@@ -293,6 +321,8 @@ function mapRecommendation(rec: RecommendationApi, index: number): DayRecommenda
       bottomId,
       topName,
       bottomName,
+      dressId,
+      dressName,
       label: rec.outfit?.label,
     },
     explanation:
@@ -766,7 +796,8 @@ export async function getWeekEvents(userId: string): Promise<WeekEventsRequest> 
 
 export async function getWeeklyRecommendations(
   userId: string,
-  events: CalendarEvent[]
+  events: CalendarEvent[],
+  userGender?: string | null,
 ): Promise<{ recommendations: DayRecommendation[] }> {
   if (USE_MOCK_API) {
     return mockGetWeeklyRecommendations(userId, events);
@@ -778,6 +809,7 @@ export async function getWeeklyRecommendations(
     method: 'POST',
     body: JSON.stringify({
       user_id: userId,
+      user_gender: userGender ?? undefined,
       events: events.map((event) => ({
         day: event.day,
         event_type: eventTypeForApi(event.eventType),
@@ -791,6 +823,116 @@ export async function getWeeklyRecommendations(
   return {
     recommendations: recs.map(mapRecommendation),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Body measurements API
+// ---------------------------------------------------------------------------
+
+interface MeasurementsApiResponse {
+  user_id: string;
+  height_cm?: number | null;
+  weight_kg?: number | null;
+  chest_cm?: number | null;
+  waist_cm?: number | null;
+  hips_cm?: number | null;
+  inseam_cm?: number | null;
+  updated_at?: string;
+}
+
+function mapMeasurements(raw: MeasurementsApiResponse): BodyMeasurements {
+  return {
+    userId: raw.user_id,
+    heightCm: raw.height_cm ?? null,
+    weightKg: raw.weight_kg ?? null,
+    chestCm: raw.chest_cm ?? null,
+    waistCm: raw.waist_cm ?? null,
+    hipsCm: raw.hips_cm ?? null,
+    inseamCm: raw.inseam_cm ?? null,
+    updatedAt: raw.updated_at,
+  };
+}
+
+export async function getMeasurements(userId: string): Promise<BodyMeasurements | null> {
+  if (USE_MOCK_API) return null;
+  try {
+    const response = await requestJson<MeasurementsApiResponse | null>(
+      `/users/${encodeURIComponent(userId)}/measurements`
+    );
+    return response ? mapMeasurements(response) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveMeasurements(
+  userId: string,
+  measurements: Omit<BodyMeasurements, 'userId' | 'updatedAt'>
+): Promise<BodyMeasurements> {
+  if (USE_MOCK_API) {
+    return { userId, ...measurements };
+  }
+  const response = await requestJson<MeasurementsApiResponse>(
+    `/users/${encodeURIComponent(userId)}/measurements`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        height_cm: measurements.heightCm ?? null,
+        weight_kg: measurements.weightKg ?? null,
+        chest_cm: measurements.chestCm ?? null,
+        waist_cm: measurements.waistCm ?? null,
+        hips_cm: measurements.hipsCm ?? null,
+        inseam_cm: measurements.inseamCm ?? null,
+      }),
+    }
+  );
+  return mapMeasurements(response);
+}
+
+// ---------------------------------------------------------------------------
+// Hide / unhide garment
+// ---------------------------------------------------------------------------
+
+export async function setGarmentHidden(
+  userId: string,
+  garmentId: string,
+  hidden: boolean
+): Promise<Garment> {
+  if (USE_MOCK_API) {
+    const wardrobe = getOrCreateMockWardrobe(userId);
+    const item = wardrobe.find((g) => g.id === garmentId);
+    if (item) {
+      item.hiddenFromRecommendations = hidden;
+    }
+    return item ?? { id: garmentId, name: '', category: 'top', color: '', formality: 'casual' };
+  }
+  const response = await requestJson<WardrobeApiItem>(
+    `/wardrobe/${encodeURIComponent(userId)}/${encodeURIComponent(garmentId)}/hide`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ hidden }),
+    }
+  );
+  return mapGarment(response);
+}
+
+// ---------------------------------------------------------------------------
+// Delete garment
+// ---------------------------------------------------------------------------
+
+export async function deleteGarment(userId: string, garmentId: string): Promise<void> {
+  if (USE_MOCK_API) {
+    const wardrobe = getOrCreateMockWardrobe(userId);
+    const idx = wardrobe.findIndex((g) => g.id === garmentId);
+    if (idx !== -1) {
+      wardrobe.splice(idx, 1);
+    }
+    return;
+  }
+  await requestJson<void>(
+    `/wardrobe/${encodeURIComponent(userId)}/${encodeURIComponent(garmentId)}`,
+    { method: 'DELETE' }
+  );
 }
 
 export async function syncCalendarEvents(

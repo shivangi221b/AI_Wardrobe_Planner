@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from ..db import get_measurements, increment_recommendation_counts
 from ..models import (
     DayOutfitSuggestion,
     WeekRecommendationRequest,
@@ -44,6 +45,7 @@ async def recommend_week(
     ```json
     {
       "user_id": "u_123",
+      "user_gender": "female",
       "events": [
         { "day": "Monday", "event_type": "work_meeting" },
         { "day": "Friday", "event_type": "date_night", "location": "New York, NY",
@@ -67,6 +69,9 @@ async def recommend_week(
 
     wardrobe = get_wardrobe(request.user_id)
 
+    # Load optional body measurements for soft size-band scoring.
+    measurements = get_measurements(request.user_id)
+
     # Future: fetch weather per event and pass WeatherContext into the engine.
     # for event in request.events:
     #     if event.location and event.datetime:
@@ -76,8 +81,20 @@ async def recommend_week(
     #         ctx = WeatherContext()
 
     day_recommendations: list[DayOutfitSuggestion] = await generate_week_recommendations(
-        wardrobe, request.events
+        wardrobe,
+        request.events,
+        user_gender=request.user_gender,
+        measurements=measurements,
     )
+
+    # Increment usage counters for recommended garments (best-effort).
+    recommended_ids = [
+        gid
+        for rec in day_recommendations
+        for gid in [rec.top_id, rec.bottom_id]
+        if gid is not None
+    ]
+    increment_recommendation_counts(recommended_ids, request.user_id)
 
     return WeekRecommendationResponse(
         user_id=request.user_id,

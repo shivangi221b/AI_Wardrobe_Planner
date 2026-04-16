@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, Component, type ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { AppStateProvider, useAppState } from './src/AppStateContext';
 import { WardrobeScreen } from './src/WardrobeScreen';
 import { EventsScreen } from './src/EventsScreen';
@@ -12,6 +12,29 @@ import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from '
 import { ProfileSetupScreen } from './src/ProfileSetupScreen';
 import { palette, radius, type } from './src/theme';
 import { initAnalytics, trackAuthSuccess } from './src/analytics';
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <ScrollView style={{ flex: 1, padding: 40, backgroundColor: '#fff' }}>
+          <Text style={{ fontSize: 20, fontWeight: 'bold', color: 'red', marginBottom: 10 }}>
+            App Error
+          </Text>
+          <Text style={{ fontSize: 14, color: '#333', fontFamily: 'monospace' }}>
+            {this.state.error.message}
+          </Text>
+          <Text style={{ fontSize: 12, color: '#666', marginTop: 10, fontFamily: 'monospace' }}>
+            {this.state.error.stack}
+          </Text>
+        </ScrollView>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const SESSION_STORAGE_KEY = '@misfitai/session';
 
@@ -35,6 +58,36 @@ function deriveUserIdFromProfile(profile?: UserProfile): string {
     return `email-${normalizedEmail.replace(/@/g, '-at-').replace(/\./g, '-dot-')}`;
   }
   return `demo-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function ProfileSetupScreenWithMeasurements({
+  session,
+  setSession,
+}: {
+  session: Session;
+  setSession: React.Dispatch<React.SetStateAction<Session | null>>;
+}) {
+  const { updateMeasurements } = useAppState();
+  return (
+    <ProfileSetupScreen
+      initialProfile={session.profile}
+      onDone={(profilePatch, measurements) => {
+        const next: Session = {
+          ...session,
+          profile: { ...(session.profile ?? {}), ...profilePatch },
+          profileCompleted: true,
+        };
+        setSession(next);
+        AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+        const hasMeasurements = Object.values(measurements).some((v) => v != null);
+        if (hasMeasurements) {
+          updateMeasurements(measurements).catch(() => {
+            /* non-blocking */
+          });
+        }
+      }}
+    />
+  );
 }
 
 function AppContent({
@@ -118,7 +171,7 @@ function AppContent({
   );
 }
 
-export default function App() {
+function AppInner() {
   const [session, setSession] = useState<Session | null>(null);
   const [restoring, setRestoring] = useState(true);
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
@@ -192,25 +245,35 @@ export default function App() {
 
   if (session.mode === 'signup' && session.profileCompleted !== true) {
     return (
-      <ProfileSetupScreen
-        initialProfile={session.profile}
-        onDone={(profilePatch) => {
-          const next: Session = {
-            ...session,
-            profile: { ...(session.profile ?? {}), ...profilePatch },
-            profileCompleted: true,
-          };
-          setSession(next);
-          AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
-        }}
-      />
+      <AppStateProvider
+        userId={session.userId}
+        userGender={session.profile?.gender ?? null}
+        googleAccessToken={null}
+      >
+        <ProfileSetupScreenWithMeasurements
+          session={session}
+          setSession={setSession}
+        />
+      </AppStateProvider>
     );
   }
 
   return (
-    <AppStateProvider userId={session.userId} googleAccessToken={googleAccessToken}>
+    <AppStateProvider
+      userId={session.userId}
+      userGender={session.profile?.gender ?? null}
+      googleAccessToken={googleAccessToken}
+    >
       <AppContent session={session} onSignOut={handleSignOut} />
     </AppStateProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
   );
 }
 

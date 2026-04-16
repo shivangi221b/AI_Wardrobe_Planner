@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Image,
   Pressable,
@@ -11,7 +12,6 @@ import {
 } from 'react-native';
 import { useAppState } from './AppStateContext';
 import { dayLabels, dayOrder, eventTypeLabels } from './constants';
-import { getFitSignals, getScheduleChips } from './lookUtils';
 import { getImageForGarment } from './stockImages';
 import type { DayOfWeek } from './types';
 import { palette, radius, type } from './theme';
@@ -28,6 +28,20 @@ function isPlaceholderName(name: string): boolean {
   );
 }
 
+function outfitSummaryLabel(rec: { outfit: { topName: string; bottomName: string; dressName?: string | null } }): string {
+  if (rec.outfit.dressName && !isPlaceholderName(rec.outfit.dressName)) {
+    return rec.outfit.dressName;
+  }
+  const parts: string[] = [];
+  if (rec.outfit.topName && !isPlaceholderName(rec.outfit.topName)) {
+    parts.push(rec.outfit.topName);
+  }
+  if (rec.outfit.bottomName && !isPlaceholderName(rec.outfit.bottomName)) {
+    parts.push(rec.outfit.bottomName);
+  }
+  return parts.length > 0 ? parts.join(' + ') : '\u2014';
+}
+
 export function WeeklyPlanScreen({
   onRegenerateWeek,
   onNavigateToWardrobe,
@@ -35,7 +49,7 @@ export function WeeklyPlanScreen({
   onRegenerateWeek: () => Promise<void>;
   onNavigateToWardrobe?: () => void;
 }) {
-  const { garments, recommendations } = useAppState();
+  const { garments, recommendations, toggleGarmentHidden } = useAppState();
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('monday');
@@ -101,6 +115,12 @@ export function WeeklyPlanScreen({
     }
   };
 
+  const dressId = selectedRecommendation?.outfit.dressId;
+  const dressGarment = dressId
+    ? garments.find((item) => item.id === dressId)
+    : undefined;
+  const isDressOutfit = Boolean(dressId);
+
   const topGarment = selectedRecommendation
     ? garments.find((item) => item.id === selectedRecommendation.outfit.topId)
     : undefined;
@@ -110,30 +130,52 @@ export function WeeklyPlanScreen({
   const outerwearGarment = garments.find((item) => item.category === 'outerwear');
   const shoesGarment = garments.find((item) => item.category === 'shoes');
 
+  const dressName = selectedRecommendation?.outfit.dressName || dressGarment?.name || '';
   const topName = selectedRecommendation?.outfit.topName || topGarment?.name || '';
   const bottomName = selectedRecommendation?.outfit.bottomName || bottomGarment?.name || '';
 
-  type CollagePiece = { name: string; image: { uri: string } | ReturnType<typeof getImageForGarment> };
+  type CollagePiece = {
+    name: string;
+    image: { uri: string } | ReturnType<typeof getImageForGarment>;
+    garmentId?: string;
+    hidden?: boolean;
+  };
   const collagePieces: CollagePiece[] = [];
-  const missingTop = !topName || isPlaceholderName(topName);
-  const missingBottom = !bottomName || isPlaceholderName(bottomName);
+
+  const missingTop = !isDressOutfit && (!topName || isPlaceholderName(topName));
+  const missingBottom = !isDressOutfit && (!bottomName || isPlaceholderName(bottomName));
   const hasMissingItems = missingTop || missingBottom;
 
-  if (!missingTop) {
+  if (isDressOutfit && dressName && !isPlaceholderName(dressName)) {
     collagePieces.push({
-      name: topName,
-      image: topGarment?.primaryImageUrl
-        ? { uri: topGarment.primaryImageUrl }
-        : getImageForGarment(topName, 'top'),
+      name: dressName,
+      image: dressGarment?.primaryImageUrl
+        ? { uri: dressGarment.primaryImageUrl }
+        : getImageForGarment(dressName, 'dress'),
+      garmentId: dressGarment?.id,
+      hidden: dressGarment?.hiddenFromRecommendations,
     });
-  }
-  if (!missingBottom) {
-    collagePieces.push({
-      name: bottomName,
-      image: bottomGarment?.primaryImageUrl
-        ? { uri: bottomGarment.primaryImageUrl }
-        : getImageForGarment(bottomName, 'bottom'),
-    });
+  } else {
+    if (!missingTop) {
+      collagePieces.push({
+        name: topName,
+        image: topGarment?.primaryImageUrl
+          ? { uri: topGarment.primaryImageUrl }
+          : getImageForGarment(topName, 'top'),
+        garmentId: topGarment?.id,
+        hidden: topGarment?.hiddenFromRecommendations,
+      });
+    }
+    if (!missingBottom) {
+      collagePieces.push({
+        name: bottomName,
+        image: bottomGarment?.primaryImageUrl
+          ? { uri: bottomGarment.primaryImageUrl }
+          : getImageForGarment(bottomName, 'bottom'),
+        garmentId: bottomGarment?.id,
+        hidden: bottomGarment?.hiddenFromRecommendations,
+      });
+    }
   }
   if (outerwearGarment) {
     collagePieces.push({
@@ -141,6 +183,8 @@ export function WeeklyPlanScreen({
       image: outerwearGarment.primaryImageUrl
         ? { uri: outerwearGarment.primaryImageUrl }
         : getImageForGarment(outerwearGarment.name, 'outerwear'),
+      garmentId: outerwearGarment.id,
+      hidden: outerwearGarment.hiddenFromRecommendations,
     });
   }
   if (shoesGarment) {
@@ -149,24 +193,46 @@ export function WeeklyPlanScreen({
       image: shoesGarment.primaryImageUrl
         ? { uri: shoesGarment.primaryImageUrl }
         : getImageForGarment(shoesGarment.name, 'shoes'),
+      garmentId: shoesGarment.id,
+      hidden: shoesGarment.hiddenFromRecommendations,
     });
   }
 
-  const scheduleChips = selectedRecommendation ? getScheduleChips(selectedRecommendation.eventType) : [];
-  const fitSignals = selectedRecommendation ? getFitSignals(selectedRecommendation.eventType) : [];
+  const handlePieceLongPress = (piece: CollagePiece) => {
+    if (!piece.garmentId) return;
+    const action = piece.hidden ? 'Unhide' : 'Hide';
+    Alert.alert(
+      `${action} from recommendations?`,
+      piece.hidden
+        ? `"${piece.name}" will appear in future recommendations again.`
+        : `"${piece.name}" will no longer be suggested in outfit recommendations.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: action,
+          style: piece.hidden ? 'default' : 'destructive',
+          onPress: () => {
+            toggleGarmentHidden(piece.garmentId!, !piece.hidden).catch(() => {
+              Alert.alert('Error', 'Could not update garment visibility. Please try again.');
+            });
+          },
+        },
+      ]
+    );
+  };
+
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Text style={styles.screenTitle}>Your weekly lookbook</Text>
         <Text style={styles.screenSubtitle}>
-          Recommendation engine is live in-app. Select a day to preview a complete, monochrome,
-          Alta-inspired collage.
+          Select a day to preview your recommended outfit.
         </Text>
 
         {recommendations.length === 0 ? (
           <Text style={styles.helperText}>
-            No recommendations yet. Go to Week Events and tap "Generate my outfits".
+            No recommendations yet. Go to Week and tap "Generate my outfits".
           </Text>
         ) : null}
 
@@ -206,25 +272,6 @@ export function WeeklyPlanScreen({
                 },
               ]}
             >
-              <View style={styles.modePills}>
-                <View style={styles.modePillMuted}>
-                  <Text style={styles.modePillMutedText}>Styled</Text>
-                </View>
-                <View style={styles.modePillActive}>
-                  <Text style={styles.modePillActiveText}>Collage</Text>
-                </View>
-              </View>
-
-              <View style={styles.scheduleRow}>
-                {scheduleChips.map((chip, index) => (
-                  <View key={chip} style={[styles.scheduleChip, index === 0 && styles.scheduleChipActive]}>
-                    <Text style={[styles.scheduleChipText, index === 0 && styles.scheduleChipTextActive]}>
-                      {chip}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-
               <Text style={styles.lookHeading}>Recommended outfit</Text>
               <Text style={styles.lookReason}>{selectedRecommendation.explanation}</Text>
 
@@ -236,6 +283,7 @@ export function WeeklyPlanScreen({
                       key={`${piece.name}-${index}`}
                       style={[
                         styles.pieceCard,
+                        piece.hidden && styles.pieceCardHidden,
                         {
                           opacity: pieceAnim,
                           transform: [
@@ -249,8 +297,17 @@ export function WeeklyPlanScreen({
                         },
                       ]}
                     >
-                      <Image source={piece.image} style={styles.pieceImage} resizeMode="contain" />
-                      <Text style={styles.pieceLabel}>{piece.name}</Text>
+                      <Pressable
+                        onLongPress={() => handlePieceLongPress(piece)}
+                        delayLongPress={400}
+                        style={styles.piecePressable}
+                      >
+                        <Image source={piece.image} style={styles.pieceImage} resizeMode="contain" />
+                        <Text style={styles.pieceLabel}>{piece.name}</Text>
+                        {piece.hidden ? (
+                          <Text style={styles.pieceHiddenBadge}>Hidden</Text>
+                        ) : null}
+                      </Pressable>
                     </Animated.View>
                   );
                 })}
@@ -260,38 +317,44 @@ export function WeeklyPlanScreen({
                 <View style={styles.missingItemsBanner}>
                   <Text style={styles.missingItemsTitle}>
                     {missingTop && missingBottom
-                      ? 'No top or bottom in your wardrobe'
+                      ? 'Your wardrobe needs a top and a bottom'
                       : missingTop
-                        ? 'No top found in your wardrobe'
-                        : 'No bottom found in your wardrobe'}
+                        ? 'We need a top to complete this outfit'
+                        : 'We need a bottom to complete this outfit'}
                   </Text>
                   <Text style={styles.missingItemsBody}>
-                    Add more garments so the recommendation engine can build a complete outfit.
+                    {missingTop && missingBottom
+                      ? 'Add at least one top (shirt, blouse, sweater) and one bottom (pants, jeans, skirt) to see complete outfits.'
+                      : missingTop
+                        ? 'Add a shirt, blouse, or sweater to your wardrobe so we can build a full outfit.'
+                        : 'Add pants, jeans, or a skirt to your wardrobe so we can build a full outfit.'}
                   </Text>
                   {onNavigateToWardrobe ? (
                     <Pressable onPress={onNavigateToWardrobe} style={styles.missingItemsButton}>
-                      <Text style={styles.missingItemsButtonText}>Add garments →</Text>
+                      <Text style={styles.missingItemsButtonText}>
+                        {missingTop && missingBottom
+                          ? 'Add garments \u2192'
+                          : missingTop
+                            ? 'Add a top \u2192'
+                            : 'Add a bottom \u2192'}
+                      </Text>
                     </Pressable>
                   ) : null}
                 </View>
               ) : null}
-
-              <View style={styles.signalsRow}>
-                {fitSignals.map((signal) => (
-                  <View key={signal.label} style={styles.signalCard}>
-                    <Text style={styles.signalLabel}>{signal.label}</Text>
-                    <Text style={styles.signalValue}>{signal.value}</Text>
-                  </View>
-                ))}
-              </View>
             </Animated.View>
 
             <View style={styles.weekList}>
               <Text style={styles.weekListTitle}>Week summary</Text>
               {recommendations.map((rec) => (
                 <View key={rec.day} style={styles.weekRow}>
-                  <Text style={styles.weekDay}>{dayLabels[rec.day]}</Text>
-                  <Text style={styles.weekEvent}>{eventTypeLabels[rec.eventType]}</Text>
+                  <View style={styles.weekRowLeft}>
+                    <Text style={styles.weekDay}>{dayLabels[rec.day]}</Text>
+                    <Text style={styles.weekEvent}>{eventTypeLabels[rec.eventType]}</Text>
+                  </View>
+                  <Text style={styles.weekOutfit} numberOfLines={1}>
+                    {outfitSummaryLabel(rec)}
+                  </Text>
                 </View>
               ))}
             </View>
@@ -376,61 +439,6 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 12,
   },
-  modePills: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  modePillMuted: {
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: palette.line,
-    backgroundColor: palette.panelStrong,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  modePillActive: {
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: palette.accent,
-    backgroundColor: palette.accentSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  modePillMutedText: {
-    color: palette.muted,
-    fontSize: 12,
-    fontFamily: type.bodyMedium,
-  },
-  modePillActiveText: {
-    color: palette.ink,
-    fontSize: 12,
-    fontFamily: type.bodyDemi,
-  },
-  scheduleRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 7,
-  },
-  scheduleChip: {
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: palette.line,
-    backgroundColor: palette.panelStrong,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-  },
-  scheduleChipActive: {
-    borderColor: palette.accent,
-    backgroundColor: palette.accent,
-  },
-  scheduleChipText: {
-    color: palette.muted,
-    fontSize: 12,
-    fontFamily: type.bodyMedium,
-  },
-  scheduleChipTextActive: {
-    color: '#f4f4f2',
-  },
   lookHeading: {
     fontSize: 28,
     lineHeight: 31,
@@ -455,6 +463,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.line,
     backgroundColor: palette.panelStrong,
+    overflow: 'hidden',
+  },
+  pieceCardHidden: {
+    opacity: 0.45,
+    borderStyle: 'dashed',
+    borderColor: palette.lineStrong,
+  },
+  piecePressable: {
     padding: 10,
     alignItems: 'center',
   },
@@ -468,6 +484,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     fontFamily: type.bodyDemi,
+  },
+  pieceHiddenBadge: {
+    marginTop: 4,
+    color: palette.muted,
+    fontSize: 10,
+    fontFamily: type.bodyDemi,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   missingItemsBanner: {
     borderRadius: radius.lg,
@@ -503,32 +527,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: type.bodyDemi,
   },
-  signalsRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  signalCard: {
-    flex: 1,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: palette.line,
-    backgroundColor: palette.accentSoft,
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 7,
-  },
-  signalLabel: {
-    color: palette.ink,
-    fontSize: 12,
-    fontFamily: type.bodyDemi,
-  },
-  signalValue: {
-    marginTop: 3,
-    color: palette.muted,
-    textAlign: 'center',
-    fontSize: 12,
-    fontFamily: type.body,
-  },
   weekList: {
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -545,7 +543,12 @@ const styles = StyleSheet.create({
   weekRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     paddingVertical: 5,
+    gap: 8,
+  },
+  weekRowLeft: {
+    flexShrink: 0,
   },
   weekDay: {
     color: palette.inkSoft,
@@ -554,8 +557,15 @@ const styles = StyleSheet.create({
   },
   weekEvent: {
     color: palette.muted,
-    fontSize: 13,
+    fontSize: 11,
     fontFamily: type.body,
+  },
+  weekOutfit: {
+    flex: 1,
+    color: palette.ink,
+    fontSize: 12,
+    fontFamily: type.bodyMedium,
+    textAlign: 'right',
   },
   errorText: {
     color: palette.error,

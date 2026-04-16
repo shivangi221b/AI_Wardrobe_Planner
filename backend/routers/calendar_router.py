@@ -26,10 +26,12 @@ GOOGLE_CALENDAR_EVENTS_URL = (
 )
 
 # Ordered list of (keywords, event_type) pairs — first match wins.
+# Keywords are kept specific to reduce false positives (e.g. "call" and "office"
+# were removed from work_meeting because they match "Call Mom" or "Office Depot").
 _EVENT_TYPE_RULES: list[tuple[list[str], str]] = [
-    (["gym", "workout", "fitness", "run", "running", "yoga", "crossfit", "pilates", "swim", "cycling"], "gym"),
-    (["meeting", "standup", "stand-up", "sync", "call", "interview", "work", "office", "client", "presentation", "conference"], "work_meeting"),
-    (["date", "dinner", "restaurant", "romantic", "anniversary", "valentine"], "date_night"),
+    (["gym", "workout", "fitness", "run", "running", "yoga", "crossfit", "pilates", "swim", "cycling", "hiit", "training"], "gym"),
+    (["meeting", "standup", "stand-up", "interview", "client", "presentation", "conference", "1:1", "sprint", "review", "scrum", "retro", "all-hands"], "work_meeting"),
+    (["date night", "romantic", "anniversary", "valentine"], "date_night"),
 ]
 
 
@@ -96,16 +98,16 @@ async def sync_calendar(user_id: str, body: CalendarSyncRequest) -> WeekEventsBo
     data = response.json()
     google_items: list[dict] = data.get("items", [])
 
-    # Build a mapping of weekday index → dominant event type for that day.
-    # Multiple events on the same day: first non-none match wins; fallback to "casual".
-    day_events: dict[int, str] = {}
+    # Build a mapping of weekday index → (event_type, original_summary).
+    # Multiple events on the same day: highest-priority type wins.
+    _TYPE_PRIORITY = {"work_meeting": 3, "date_night": 2, "gym": 1, "casual": 0}
+    day_events: dict[int, tuple[str, str]] = {}
 
     today = datetime.now(timezone.utc).date()
     monday = today - timedelta(days=today.weekday())
 
     for item in google_items:
         start = item.get("start", {})
-        # All-day events use "date"; timed events use "dateTime".
         start_str: str | None = start.get("date") or start.get("dateTime")
         if not start_str:
             continue
@@ -119,18 +121,23 @@ async def sync_calendar(user_id: str, body: CalendarSyncRequest) -> WeekEventsBo
         if weekday_index < 0 or weekday_index > 6:
             continue
 
-        if weekday_index in day_events:
-            # Day already has a mapped event; keep it (first wins).
-            continue
-
         summary: str = item.get("summary", "")
-        day_events[weekday_index] = _map_summary_to_event_type(summary)
+        mapped_type = _map_summary_to_event_type(summary)
+        new_priority = _TYPE_PRIORITY.get(mapped_type, 0)
 
-    # Build the full 7-day list, defaulting to "none" for days with no events.
+        if weekday_index in day_events:
+            existing_type, _ = day_events[weekday_index]
+            existing_priority = _TYPE_PRIORITY.get(existing_type, 0)
+            if new_priority <= existing_priority:
+                continue
+
+        day_events[weekday_index] = (mapped_type, summary)
+
     events: list[WeekEvent] = [
         WeekEvent(
             day=_DAY_NAMES[i],
-            event_type=day_events.get(i, "none"),
+            event_type=day_events[i][0] if i in day_events else "none",
+            original_summary=day_events[i][1] if i in day_events else None,
         )
         for i in range(7)
     ]
