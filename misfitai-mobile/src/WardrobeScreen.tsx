@@ -6,6 +6,7 @@ import {
   Animated,
   Image,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -322,22 +323,27 @@ export function WardrobeScreen({
   };
 
   const handleDeletePress = (garment: { id: string; name: string }) => {
-    Alert.alert(
-      'Remove item?',
-      `"${garment.name}" will be permanently deleted from your wardrobe.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            deleteGarmentFromWardrobe(garment.id).catch(() => {
-              Alert.alert('Error', 'Could not delete item. Please try again.');
-            });
-          },
-        },
-      ]
-    );
+    const doDelete = () => {
+      deleteGarmentFromWardrobe(garment.id).catch(() => {
+        Alert.alert('Error', 'Could not delete item. Please try again.');
+      });
+    };
+
+    if (Platform.OS === 'web') {
+      // Alert.alert multi-button callbacks are unreliable on web (falls back to window.confirm).
+      if (window.confirm(`Remove "${garment.name}" from your wardrobe?`)) {
+        doDelete();
+      }
+    } else {
+      Alert.alert(
+        'Remove item?',
+        `"${garment.name}" will be permanently deleted from your wardrobe.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: doDelete },
+        ]
+      );
+    }
   };
 
   const animatedStyle = {
