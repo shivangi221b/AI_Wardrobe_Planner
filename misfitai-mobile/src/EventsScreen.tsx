@@ -13,8 +13,9 @@ import { dayOrder, eventTypeLabels, eventTypeOptions } from './constants';
 import type { DayOfWeek, EventType } from './types';
 import { palette, radius, type } from './theme';
 
-const TOP_CATEGORIES = ['top', 'shirt', 'blouse', 'sweater', 'jacket', 'activewear_top'];
+const TOP_CATEGORIES = ['top', 'shirt', 'blouse', 'sweater', 'jacket', 'activewear_top', 'outerwear'];
 const BOTTOM_CATEGORIES = ['bottom', 'pants', 'jeans', 'skirt', 'activewear_bottom'];
+const FULL_OUTFIT_CATEGORIES = ['dress'];
 
 function getWeekDates(): Record<DayOfWeek, Date> {
   const today = new Date();
@@ -75,7 +76,11 @@ export function EventsScreen({
     () => garments.some((g) => BOTTOM_CATEGORIES.includes(g.category)),
     [garments]
   );
-  const canGenerate = hasTops && hasBottoms;
+  const hasDresses = useMemo(
+    () => garments.some((g) => FULL_OUTFIT_CATEGORIES.includes(g.category)),
+    [garments]
+  );
+  const canGenerate = hasTops || hasBottoms || hasDresses;
 
   useEffect(() => {
     Animated.stagger(
@@ -205,11 +210,7 @@ export function EventsScreen({
 
         {!canGenerate ? (
           <Text style={styles.helperText}>
-            {!hasTops && !hasBottoms
-              ? 'Add at least one top and one bottom in Wardrobe to generate outfits.'
-              : !hasTops
-                ? 'Add at least one top (shirt, blouse, sweater) to generate outfits.'
-                : 'Add at least one bottom (pants, jeans, skirt) to generate outfits.'}
+            Add at least one garment (top, bottom, or dress) in Wardrobe to generate outfits.
           </Text>
         ) : null}
 

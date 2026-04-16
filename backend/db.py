@@ -324,16 +324,27 @@ def _ensure_garment_tags(garment: GarmentItem) -> GarmentItem:
     )
 
 
+_SUPABASE_GARMENT_COLUMNS = {
+    "id", "user_id", "primary_image_url", "alt_image_urls",
+    "category", "sub_category", "color_primary", "color_secondary",
+    "pattern", "formality", "seasonality", "brand", "size",
+    "material", "fit_notes", "embedding_id", "created_at", "updated_at",
+}
+
+
+def _supabase_payload(garment: GarmentItem) -> dict:
+    """Build an insert-safe dict containing only columns present in the DB."""
+    raw = garment.model_dump(mode="json")
+    return {k: v for k, v in raw.items() if k in _SUPABASE_GARMENT_COLUMNS}
+
+
 def insert_garment(garment: GarmentItem) -> GarmentItem:
     garment = _ensure_garment_tags(garment)
     if _use_local_store():
         current = _local_wardrobes.get(garment.user_id, [])
         _local_wardrobes[garment.user_id] = [garment] + current
         return garment
-    # Supabase table may not yet have a dedicated "tags" column; drop it from
-    # the payload and let consumers recompute tags from the structured enums.
-    payload = garment.model_dump(mode="json")
-    payload.pop("tags", None)
+    payload = _supabase_payload(garment)
     result = get_supabase_client().table(_table_name()).insert(payload).execute()
     row = (result.data or [payload])[0]
     return _row_to_garment(row)
@@ -352,8 +363,7 @@ def set_wardrobe(user_id: str, items: List[GarmentItem]) -> None:
     client = get_supabase_client()
     client.table(_table_name()).delete().eq("user_id", user_id).execute()
     for garment in items:
-        payload = garment.model_dump(mode="json")
-        payload.pop("tags", None)
+        payload = _supabase_payload(garment)
         client.table(_table_name()).insert(payload).execute()
 
 

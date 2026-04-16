@@ -10,17 +10,17 @@
     "export:web": "expo export --platform web --output-dir dist && node ./scripts/copy-static-pages.mjs"
   },
   "dependencies": {
-    "@react-native-async-storage/async-storage": "^3.0.1",
-    "expo": "~55.0.5",
-    "expo-apple-authentication": "~55.0.8",
-    "expo-auth-session": "~55.0.7",
-    "expo-image-picker": "~17.0.8",
-    "expo-status-bar": "~55.0.4",
-    "expo-web-browser": "~55.0.9",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "expo": "~55.0.15",
+    "expo-apple-authentication": "~55.0.13",
+    "expo-auth-session": "~55.0.14",
+    "expo-image-picker": "~55.0.18",
+    "expo-status-bar": "~55.0.5",
+    "expo-web-browser": "~55.0.14",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-ga4": "^2.1.0",
-    "react-native": "0.83.2",
+    "react-native": "0.83.4",
     "react-native-web": "^0.21.0"
   },
   "devDependencies": {
