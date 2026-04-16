@@ -458,6 +458,33 @@ def set_garment_hidden(garment_id: str, user_id: str, hidden: bool) -> Optional[
         return None
 
 
+def delete_garment(garment_id: str, user_id: str) -> bool:
+    """Permanently remove a single garment from a user's wardrobe.
+
+    Returns ``True`` if the garment was found and deleted, ``False`` otherwise.
+    """
+    if _use_local_store():
+        wardrobe = _local_wardrobes.get(user_id, [])
+        new_wardrobe = [g for g in wardrobe if g.id != garment_id]
+        found = len(new_wardrobe) < len(wardrobe)
+        _local_wardrobes[user_id] = new_wardrobe
+        return found
+    try:
+        result = (
+            get_supabase_client()
+            .table(_table_name())
+            .delete()
+            .eq("id", garment_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = result.data or []
+        return len(rows) > 0
+    except Exception:
+        logger.exception("delete_garment failed garment_id=%s", garment_id)
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Body measurements
 # ---------------------------------------------------------------------------
@@ -473,12 +500,13 @@ def get_measurements(user_id: str) -> Optional[BodyMeasurements]:
             .table(_measurements_table_name())
             .select("*")
             .eq("user_id", user_id)
-            .maybe_single()
+            .limit(1)
             .execute()
         )
-        if not result.data:
+        rows = result.data or []
+        if not rows:
             return None
-        return _row_to_measurements(result.data)
+        return _row_to_measurements(rows[0])
     except Exception:
         logger.exception("get_measurements failed user_id=%s", user_id)
         return None

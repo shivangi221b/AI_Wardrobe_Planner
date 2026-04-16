@@ -2,9 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Image,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -57,6 +59,7 @@ export function WardrobeScreen({
     commitVisionItems,
     addGarmentViaSearch,
     searchGarmentCandidates,
+    deleteGarmentFromWardrobe,
   } = useAppState();
 
   const [name, setName] = useState('');
@@ -316,6 +319,30 @@ export function WardrobeScreen({
       } finally {
         setSaving(false);
       }
+    }
+  };
+
+  const handleDeletePress = (garment: { id: string; name: string }) => {
+    const doDelete = () => {
+      deleteGarmentFromWardrobe(garment.id).catch(() => {
+        Alert.alert('Error', 'Could not delete item. Please try again.');
+      });
+    };
+
+    if (Platform.OS === 'web') {
+      // Alert.alert multi-button callbacks are unreliable on web (falls back to window.confirm).
+      if (window.confirm(`Remove "${garment.name}" from your wardrobe?`)) {
+        doDelete();
+      }
+    } else {
+      Alert.alert(
+        'Remove item?',
+        `"${garment.name}" will be permanently deleted from your wardrobe.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: doDelete },
+        ]
+      );
     }
   };
 
@@ -1081,6 +1108,15 @@ export function WardrobeScreen({
                       );
                     })()}
                   </View>
+                  <Pressable
+                    onPress={() => handleDeletePress(garment)}
+                    style={styles.cardDeleteBtn}
+                    hitSlop={8}
+                    accessibilityLabel="Delete garment"
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.cardDeleteBtnText}>×</Text>
+                  </Pressable>
                 </View>
               ))}
 
@@ -1182,6 +1218,7 @@ const styles = StyleSheet.create({
     fontFamily: type.body,
   },
   card: {
+    position: 'relative',
     flexDirection: 'row',
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -1252,6 +1289,23 @@ const styles = StyleSheet.create({
   cardBody: {
     flex: 1,
     justifyContent: 'center',
+  },
+  cardDeleteBtn: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: palette.panelStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardDeleteBtnText: {
+    color: palette.muted,
+    fontSize: 16,
+    lineHeight: 20,
+    fontFamily: type.body,
   },
   cardTitle: {
     color: palette.ink,
