@@ -608,17 +608,20 @@ async function readImageBlobWithRetry(payload: VisionAddPayload): Promise<Blob> 
       const timeoutId = controller
         ? setTimeout(() => controller.abort(), VISION_FILE_FETCH_TIMEOUT_MS)
         : null;
-      const response = await fetch(
-        payload.imageUri,
-        controller ? { signal: controller.signal } : undefined
-      );
-      if (timeoutId) {
-        clearTimeout(timeoutId);
+      try {
+        const response = await fetch(
+          payload.imageUri,
+          controller ? { signal: controller.signal } : undefined
+        );
+        if (!response.ok) {
+          throw new Error(`Failed to read selected image (${response.status}).`);
+        }
+        return await response.blob();
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
       }
-      if (!response.ok) {
-        throw new Error(`Failed to read selected image (${response.status}).`);
-      }
-      return await response.blob();
     } catch (error) {
       if (attempt >= VISION_REQUEST_RETRIES) {
         throw error;
