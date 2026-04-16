@@ -482,7 +482,7 @@ def delete_garment(garment_id: str, user_id: str) -> bool:
         return len(rows) > 0
     except Exception:
         logger.exception("delete_garment failed garment_id=%s", garment_id)
-        return False
+        raise
 
 
 # ---------------------------------------------------------------------------

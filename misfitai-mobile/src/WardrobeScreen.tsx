@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Image,
   Modal,
@@ -318,6 +319,25 @@ export function WardrobeScreen({
         setSaving(false);
       }
     }
+  };
+
+  const handleDeletePress = (garment: { id: string; name: string }) => {
+    Alert.alert(
+      'Remove item?',
+      `"${garment.name}" will be permanently deleted from your wardrobe.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            deleteGarmentFromWardrobe(garment.id).catch(() => {
+              Alert.alert('Error', 'Could not delete item. Please try again.');
+            });
+          },
+        },
+      ]
+    );
   };
 
   const animatedStyle = {
@@ -1037,7 +1057,7 @@ export function WardrobeScreen({
                 wardrobeFilter === 'all' ? true : garment.category === wardrobeFilter
               )
               .map((garment) => (
-                <View key={garment.id} style={[styles.card, { position: 'relative' }]}>
+                <View key={garment.id} style={styles.card}>
                   <Pressable
                     onPress={() => {
                       if (garment.primaryImageUrl) {
@@ -1083,7 +1103,7 @@ export function WardrobeScreen({
                     })()}
                   </View>
                   <Pressable
-                    onPress={() => deleteGarmentFromWardrobe(garment.id)}
+                    onPress={() => handleDeletePress(garment)}
                     style={styles.cardDeleteBtn}
                     hitSlop={8}
                     accessibilityLabel="Delete garment"
@@ -1192,6 +1212,7 @@ const styles = StyleSheet.create({
     fontFamily: type.body,
   },
   card: {
+    position: 'relative',
     flexDirection: 'row',
     borderRadius: radius.lg,
     borderWidth: 1,

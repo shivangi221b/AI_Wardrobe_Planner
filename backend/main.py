@@ -568,6 +568,9 @@ def patch_garment_hidden(user_id: str, garment_id: str, body: HideGarmentBody) -
 @app.delete("/wardrobe/{user_id}/{garment_id}", status_code=204)
 def delete_wardrobe_item(user_id: str, garment_id: str) -> None:
     """Permanently remove a garment from the user's wardrobe."""
-    found = delete_garment(garment_id, user_id)
+    try:
+        found = delete_garment(garment_id, user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Failed to delete garment.") from exc
     if not found:
         raise HTTPException(status_code=404, detail=f"Garment {garment_id} not found.")
