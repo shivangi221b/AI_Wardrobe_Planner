@@ -1,19 +1,26 @@
 import React from 'react';
-import { render, waitFor, fireEvent } from '@testing-library/react-native';
+import { render, waitFor } from '@testing-library/react-native';
 import { AppStateProvider } from '../AppStateContext';
 import { EventsScreen } from '../EventsScreen';
 
 describe('EventsScreen', () => {
   const mockOnGenerate = jest.fn(() => Promise.resolve());
+  const mockOnBackToWardrobe = jest.fn();
 
   beforeEach(() => {
     mockOnGenerate.mockClear();
+    mockOnBackToWardrobe.mockClear();
   });
 
   it('renders without crashing', async () => {
     const { toJSON } = render(
       <AppStateProvider userId="test-user">
-        <EventsScreen onGenerate={mockOnGenerate} />
+        <EventsScreen
+          onGenerate={mockOnGenerate}
+          onBackToWardrobe={mockOnBackToWardrobe}
+          wardrobeStepComplete
+          calendarStepComplete
+        />
       </AppStateProvider>,
     );
     await waitFor(() => {
@@ -24,21 +31,28 @@ describe('EventsScreen', () => {
   it('renders all 7 days', async () => {
     const tree = render(
       <AppStateProvider userId="test-user">
-        <EventsScreen onGenerate={mockOnGenerate} />
+        <EventsScreen
+          onGenerate={mockOnGenerate}
+          onBackToWardrobe={mockOnBackToWardrobe}
+          wardrobeStepComplete
+          calendarStepComplete
+        />
       </AppStateProvider>,
     );
     await waitFor(() => {
-      const json = JSON.stringify(tree.toJSON());
-      expect(json).toContain('Monday');
-      expect(json).toContain('Friday');
-      expect(json).toContain('Sunday');
+      expect(tree.queryAllByText('No major event')).toHaveLength(7);
     });
   });
 
   it('renders event type options', async () => {
     const tree = render(
       <AppStateProvider userId="test-user">
-        <EventsScreen onGenerate={mockOnGenerate} />
+        <EventsScreen
+          onGenerate={mockOnGenerate}
+          onBackToWardrobe={mockOnBackToWardrobe}
+          wardrobeStepComplete
+          calendarStepComplete
+        />
       </AppStateProvider>,
     );
     await waitFor(() => {
@@ -51,15 +65,17 @@ describe('EventsScreen', () => {
   it('has a generate button', async () => {
     const tree = render(
       <AppStateProvider userId="test-user">
-        <EventsScreen onGenerate={mockOnGenerate} />
+        <EventsScreen
+          onGenerate={mockOnGenerate}
+          onBackToWardrobe={mockOnBackToWardrobe}
+          wardrobeStepComplete
+          calendarStepComplete
+        />
       </AppStateProvider>,
     );
     await waitFor(() => {
       const json = JSON.stringify(tree.toJSON());
-      // Should contain "Generate" text for the looks/plan generation button
-      expect(
-        json.includes('Generate') || json.includes('Plan') || json.includes('Looks'),
-      ).toBe(true);
+      expect(json).toContain('Next: Generate outfits');
     });
   });
 });

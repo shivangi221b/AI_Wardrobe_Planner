@@ -45,9 +45,11 @@ function outfitSummaryLabel(rec: { outfit: { topName: string; bottomName: string
 export function WeeklyPlanScreen({
   onRegenerateWeek,
   onNavigateToWardrobe,
+  onBackToCalendar,
 }: {
   onRegenerateWeek: () => Promise<void>;
   onNavigateToWardrobe?: () => void;
+  onBackToCalendar?: () => void;
 }) {
   const { garments, recommendations, toggleGarmentHidden } = useAppState();
   const [regenerating, setRegenerating] = useState(false);
@@ -232,7 +234,7 @@ export function WeeklyPlanScreen({
 
         {recommendations.length === 0 ? (
           <Text style={styles.helperText}>
-            No recommendations yet. Go to Week and tap "Generate my outfits".
+            No recommendations yet. Go to Calendar and tap "Next: Generate outfits".
           </Text>
         ) : null}
 
@@ -363,6 +365,12 @@ export function WeeklyPlanScreen({
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
+        {onBackToCalendar ? (
+          <Pressable onPress={onBackToCalendar} style={styles.secondaryButton}>
+            <Text style={styles.secondaryButtonText}>Back to calendar</Text>
+          </Pressable>
+        ) : null}
+
         {recommendations.length > 0 ? (
           <Pressable onPress={handleRegenerate} style={styles.primaryButton} disabled={regenerating}>
             <Text style={styles.primaryButtonText}>
@@ -429,7 +437,7 @@ const styles = StyleSheet.create({
     fontFamily: type.bodyMedium,
   },
   dayTabTextActive: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
   },
   lookCard: {
     borderRadius: 22,
@@ -579,7 +587,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryButtonText: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
+    fontSize: 14,
+    fontFamily: type.bodyDemi,
+  },
+  secondaryButton: {
+    marginTop: 4,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.ink,
+    backgroundColor: palette.accentSoft,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  secondaryButtonText: {
+    color: palette.ink,
     fontSize: 14,
     fontFamily: type.bodyDemi,
   },

@@ -100,7 +100,7 @@ export function SearchableSelect({
               value={filter}
               onChangeText={setFilter}
               placeholder={placeholder ?? 'Type to filter…'}
-              placeholderTextColor="#8f8f8a"
+              placeholderTextColor={palette.inputPlaceholder}
               style={styles.filterInput}
               autoCorrect={false}
               autoCapitalize="none"
@@ -156,7 +156,7 @@ export function SearchableSelect({
                   value={otherDraft}
                   onChangeText={setOtherDraft}
                   placeholder="Type brand, color, material, or style"
-                  placeholderTextColor="#8f8f8a"
+                  placeholderTextColor={palette.inputPlaceholder}
                   style={styles.otherInput}
                   autoCorrect={true}
                 />
@@ -165,7 +165,7 @@ export function SearchableSelect({
                     <Text style={styles.otherCancelText}>Back</Text>
                   </Pressable>
                   <Pressable style={styles.otherApply} onPress={applyOther}>
-                    <Text style={styles.otherApplyText}>Use value</Text>
+                    <Text style={styles.otherApplyText}>Apply</Text>
                   </Pressable>
                 </View>
               </View>
@@ -219,7 +219,7 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    backgroundColor: palette.overlayScrim,
     justifyContent: 'flex-end',
   },
   sheet: {

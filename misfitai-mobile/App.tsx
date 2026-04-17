@@ -50,6 +50,16 @@ type Session = {
   profileCompleted?: boolean;
 };
 
+const DEMO_WEEK_EVENTS = {
+  monday: 'work_meeting',
+  tuesday: 'work_meeting',
+  wednesday: 'gym',
+  thursday: 'work_meeting',
+  friday: 'date_night',
+  saturday: 'casual',
+  sunday: 'none',
+} as const;
+
 /** Stable user id for API/Supabase: provider id, or normalized email, or fallback. */
 function deriveUserIdFromProfile(profile?: UserProfile): string {
   if (profile?.id) return profile.id;
@@ -98,40 +108,139 @@ function AppContent({
   onSignOut: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('wardrobe');
-  const { generateRecommendations } = useAppState();
+  const [tabHint, setTabHint] = useState<string | null>(null);
+  const { generateRecommendations, garments, isCalendarConnected, eventsByDay, recommendations } =
+    useAppState();
+
+  const wardrobeStepComplete =
+    garments.some((item) => item.category === 'top') &&
+    garments.some((item) => item.category === 'bottom');
+  const demoWeekSelected = (
+    Object.keys(DEMO_WEEK_EVENTS) as Array<keyof typeof DEMO_WEEK_EVENTS>
+  ).every((day) => eventsByDay[day] === DEMO_WEEK_EVENTS[day]);
+  const calendarStepComplete = isCalendarConnected || demoWeekSelected;
+  const outfitsStepComplete = recommendations.length > 0;
+
+  const flowSteps: Array<{
+    key: Tab;
+    label: string;
+    complete: boolean;
+  }> = [
+    { key: 'wardrobe', label: 'Wardrobe', complete: wardrobeStepComplete },
+    { key: 'events', label: 'Calendar', complete: calendarStepComplete },
+    { key: 'plan', label: 'Outfits', complete: outfitsStepComplete },
+  ];
+
+  const handleTabChange = (nextTab: Tab) => {
+    setTab(nextTab);
+    if (nextTab === 'events' && !wardrobeStepComplete) {
+      setTabHint('Wardrobe is complete after at least one top and one bottom.');
+      return;
+    }
+    if (nextTab === 'plan' && !calendarStepComplete) {
+      setTabHint('Connect your calendar or use demo week before generating outfits.');
+      return;
+    }
+    if (nextTab === 'plan' && !outfitsStepComplete) {
+      setTabHint('Generate outfits in Calendar to populate this step.');
+      return;
+    }
+    setTabHint(null);
+  };
 
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
       <AtmosphereBackground />
 
-      <View style={styles.metaBar}>
-        <View style={styles.metaChip}>
-          <Text style={styles.metaChipText}>
-            {session.provider.toUpperCase()} · {session.mode}
-            {session.profile?.displayName ? ` · ${session.profile.displayName}` : ''}
-            {session.profile?.gender ? ` · ${session.profile.gender}` : ''}
-          </Text>
+      <View style={styles.topChrome}>
+        <View style={styles.metaBar}>
+          <View style={styles.metaChip}>
+            <Text style={styles.metaChipText}>
+              {session.provider.toUpperCase()} · {session.mode}
+              {session.profile?.displayName ? ` · ${session.profile.displayName}` : ''}
+              {session.profile?.gender ? ` · ${session.profile.gender}` : ''}
+            </Text>
+          </View>
+          <Pressable onPress={onSignOut} style={styles.metaChip}>
+            <Text style={styles.metaChipText}>Sign out</Text>
+          </Pressable>
         </View>
-        <Pressable onPress={onSignOut} style={styles.metaChip}>
-          <Text style={styles.metaChipText}>Sign out</Text>
-        </Pressable>
+
+        <View style={styles.stepperCard}>
+          {flowSteps.map((item, index) => {
+            const active = tab === item.key;
+            return (
+              <React.Fragment key={item.key}>
+                <Pressable style={styles.stepperPressable} onPress={() => handleTabChange(item.key)}>
+                  <View
+                    style={[
+                      styles.stepBadge,
+                      item.complete && styles.stepBadgeComplete,
+                      active && styles.stepBadgeActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.stepBadgeText,
+                        item.complete && !active && styles.stepBadgeTextComplete,
+                        active && styles.stepBadgeTextActive,
+                      ]}
+                    >
+                      {item.complete ? '✓' : index + 1}
+                    </Text>
+                  </View>
+                  <Text style={[styles.stepLabel, active && styles.stepLabelActive]}>{item.label}</Text>
+                </Pressable>
+                {index < flowSteps.length - 1 ? <View style={styles.stepConnector} /> : null}
+              </React.Fragment>
+            );
+          })}
+        </View>
+
+        <View style={styles.breadcrumbRow}>
+          {flowSteps.map((item, index) => {
+            const active = tab === item.key;
+            return (
+              <React.Fragment key={item.key}>
+                <Pressable
+                  onPress={() => handleTabChange(item.key)}
+                  style={[styles.breadcrumbChip, active && styles.breadcrumbChipActive]}
+                >
+                  <Text style={[styles.breadcrumbChipText, active && styles.breadcrumbChipTextActive]}>
+                    {item.label}
+                  </Text>
+                  {item.complete ? <Text style={styles.breadcrumbDone}>Done</Text> : null}
+                </Pressable>
+                {index < flowSteps.length - 1 ? (
+                  <Text style={styles.breadcrumbSeparator}>›</Text>
+                ) : null}
+              </React.Fragment>
+            );
+          })}
+        </View>
+
+        {tabHint ? <Text style={styles.stepHint}>{tabHint}</Text> : null}
       </View>
 
       <View style={styles.content}>
         {tab === 'wardrobe' ? (
           <WardrobeScreen
+            isStepComplete={wardrobeStepComplete}
             onNext={() => {
-              setTab('events');
+              handleTabChange('events');
             }}
           />
         ) : null}
 
         {tab === 'events' ? (
           <EventsScreen
+            wardrobeStepComplete={wardrobeStepComplete}
+            calendarStepComplete={calendarStepComplete}
+            onBackToWardrobe={() => handleTabChange('wardrobe')}
             onGenerate={async () => {
               await generateRecommendations();
-              setTab('plan');
+              handleTabChange('plan');
             }}
           />
         ) : null}
@@ -141,7 +250,8 @@ function AppContent({
             onRegenerateWeek={async () => {
               await generateRecommendations();
             }}
-            onNavigateToWardrobe={() => setTab('wardrobe')}
+            onBackToCalendar={() => handleTabChange('events')}
+            onNavigateToWardrobe={() => handleTabChange('wardrobe')}
           />
         ) : null}
       </View>
@@ -149,12 +259,12 @@ function AppContent({
       <View style={styles.navBar}>
         {([
           { key: 'wardrobe', label: 'Wardrobe' },
-          { key: 'events', label: 'Week' },
-          { key: 'plan', label: 'Looks' },
+          { key: 'events', label: 'Calendar' },
+          { key: 'plan', label: 'Outfits' },
         ] as const).map((item) => {
           const active = tab === item.key;
           return (
-            <Pressable key={item.key} style={styles.navItem} onPress={() => setTab(item.key)}>
+            <Pressable key={item.key} style={styles.navItem} onPress={() => handleTabChange(item.key)}>
               <View style={[styles.navDot, active && styles.navDotActive]} />
               <Text style={[styles.navLabel, active && styles.navLabelActive]}>{item.label}</Text>
             </Pressable>
@@ -282,18 +392,18 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: palette.bg,
   },
+  topChrome: {
+    paddingTop: 50,
+    paddingHorizontal: 14,
+    gap: 8,
+  },
   content: {
     flex: 1,
   },
   metaBar: {
-    position: 'absolute',
-    top: 52,
-    left: 14,
-    right: 14,
-    zIndex: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    pointerEvents: 'box-none',
+    gap: 8,
   },
   metaChip: {
     borderRadius: radius.pill,
@@ -306,6 +416,114 @@ const styles = StyleSheet.create({
   metaChipText: {
     color: palette.muted,
     fontSize: 11,
+    fontFamily: type.bodyDemi,
+  },
+  stepperCard: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: palette.line,
+    backgroundColor: palette.panel,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  stepperPressable: {
+    flex: 0,
+    alignItems: 'center',
+    gap: 4,
+    minWidth: 56,
+  },
+  stepBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    backgroundColor: palette.panelStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepBadgeComplete: {
+    borderColor: palette.accent,
+    backgroundColor: palette.accentSoft,
+  },
+  stepBadgeActive: {
+    borderColor: palette.accent,
+    backgroundColor: palette.accent,
+  },
+  stepBadgeText: {
+    color: palette.muted,
+    fontSize: 12,
+    fontFamily: type.bodyDemi,
+    lineHeight: 14,
+  },
+  stepBadgeTextComplete: {
+    color: palette.ink,
+  },
+  stepBadgeTextActive: {
+    color: palette.textOnAccent,
+  },
+  stepLabel: {
+    color: palette.muted,
+    fontSize: 11,
+    fontFamily: type.bodyMedium,
+  },
+  stepLabelActive: {
+    color: palette.ink,
+    fontFamily: type.bodyDemi,
+  },
+  stepConnector: {
+    flex: 1,
+    height: 1,
+    backgroundColor: palette.line,
+    marginTop: 12,
+    marginHorizontal: 8,
+  },
+  stepHint: {
+    color: palette.muted,
+    fontSize: 12,
+    fontFamily: type.body,
+    paddingHorizontal: 4,
+  },
+  breadcrumbRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 2,
+  },
+  breadcrumbChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.line,
+    backgroundColor: palette.panel,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  breadcrumbChipActive: {
+    borderColor: palette.accent,
+    backgroundColor: palette.accentSoft,
+  },
+  breadcrumbChipText: {
+    color: palette.muted,
+    fontSize: 11,
+    fontFamily: type.bodyMedium,
+  },
+  breadcrumbChipTextActive: {
+    color: palette.ink,
+    fontFamily: type.bodyDemi,
+  },
+  breadcrumbDone: {
+    color: palette.inkSoft,
+    fontSize: 10,
+    fontFamily: type.bodyDemi,
+  },
+  breadcrumbSeparator: {
+    color: palette.muted,
+    fontSize: 12,
     fontFamily: type.bodyDemi,
   },
   navBar: {

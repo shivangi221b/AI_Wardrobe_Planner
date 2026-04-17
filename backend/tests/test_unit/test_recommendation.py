@@ -55,28 +55,27 @@ class TestPickGarment:
         result = _pick_garment(
             mock_wardrobe,
             _is_top,
-            frozenset({"formal"}),
+            [frozenset({"formal"})],
             used_ids=set(),
         )
         assert result is not None
         assert result.id == "g-top-formal"
 
-    def test_falls_back_to_category_when_no_formality_match(self, mock_wardrobe):
+    def test_returns_none_when_no_formality_tier_matches(self, mock_wardrobe):
         result = _pick_garment(
             mock_wardrobe,
             _is_top,
-            frozenset({"nonexistent"}),
+            [frozenset({"nonexistent"})],
             used_ids=set(),
         )
-        assert result is not None
-        assert _is_top(result)
+        assert result is None
 
     def test_reuses_item_when_all_used(self, mock_wardrobe):
         top_ids = {g.id for g in mock_wardrobe if _is_top(g)}
         result = _pick_garment(
             mock_wardrobe,
             _is_top,
-            frozenset({"formal"}),
+            [frozenset({"formal"})],
             used_ids=top_ids,
         )
         assert result is not None
@@ -86,7 +85,7 @@ class TestPickGarment:
         result = _pick_garment(
             mock_wardrobe,
             lambda g: False,
-            frozenset({"casual"}),
+            [frozenset({"casual"})],
             used_ids=set(),
         )
         assert result is None

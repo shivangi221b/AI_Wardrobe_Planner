@@ -10,6 +10,11 @@ export const palette = {
   muted: '#6f706b',
   accent: '#1b1b19',
   accentSoft: '#ecece8',
+  textOnAccent: '#f4f4f2',
+  inputPlaceholder: '#8f8f8a',
+  overlayScrim: 'rgba(0,0,0,0.45)',
+  backdropStrong: 'rgba(0,0,0,0.92)',
+  backdropSolid: '#000000',
   error: '#b42318',
 };
 

@@ -46,8 +46,14 @@ function formatDayHeader(d: Date): string {
 
 export function EventsScreen({
   onGenerate,
+  onBackToWardrobe,
+  wardrobeStepComplete,
+  calendarStepComplete,
 }: {
   onGenerate: () => Promise<void>;
+  onBackToWardrobe: () => void;
+  wardrobeStepComplete: boolean;
+  calendarStepComplete: boolean;
 }) {
   const {
     isCalendarConnected,
@@ -80,7 +86,15 @@ export function EventsScreen({
     () => garments.some((g) => FULL_OUTFIT_CATEGORIES.includes(g.category)),
     [garments]
   );
-  const canGenerate = hasTops || hasBottoms || hasDresses;
+
+  const canGenerateFromWardrobe = wardrobeStepComplete || (hasTops && hasBottoms) || hasDresses;
+  const canGenerate = canGenerateFromWardrobe && calendarStepComplete && !generating;
+
+  const blockerText = !canGenerateFromWardrobe
+    ? 'Back to Wardrobe and add at least one top and one bottom, or a dress.'
+    : !calendarStepComplete
+      ? 'Connect your calendar or tap Use demo week to continue.'
+      : null;
 
   useEffect(() => {
     Animated.stagger(
@@ -96,17 +110,17 @@ export function EventsScreen({
   }, [cardAnimations]);
 
   const handleConnect = async () => {
-    if (isCalendarConnected) {
-      return;
-    }
-
+    const wasConnected = isCalendarConnected;
     setConnecting(true);
     setError(null);
     try {
       await syncCalendarEvents();
       setCalendarConnected(true);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not connect calendar. Please try again.';
+      const fallback = wasConnected
+        ? 'Could not update calendar. Please try again.'
+        : 'Could not connect calendar. Please try again.';
+      const message = err instanceof Error ? err.message : fallback;
       setError(message);
     } finally {
       setConnecting(false);
@@ -131,7 +145,7 @@ export function EventsScreen({
 
   const weekStart = weekDates.monday;
   const weekEnd = weekDates.sunday;
-  const weekRangeLabel = `${formatShortDate(weekStart)} \u2013 ${formatShortDate(weekEnd)}`;
+  const weekRangeLabel = `${formatShortDate(weekStart)} – ${formatShortDate(weekEnd)}`;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -142,26 +156,36 @@ export function EventsScreen({
           Set one event per day and generate seven minimalist looks from your wardrobe.
         </Text>
 
+        <View style={styles.actionsRow}>
+          <Pressable
+            onPress={handleConnect}
+            disabled={connecting}
+            style={[styles.connectButton, isCalendarConnected && styles.connectButtonActive]}
+          >
+            <Text style={[styles.connectButtonText, isCalendarConnected && styles.connectButtonTextActive]}>
+              {connecting
+                ? isCalendarConnected
+                  ? 'Updating...'
+                  : 'Connecting...'
+                : isCalendarConnected
+                ? 'Update calendar'
+                : 'Connect calendar'}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={styles.demoWeekButton}
+            onPress={() => {
+              setError(null);
+              useDemoWeek();
+            }}
+          >
+            <Text style={styles.demoWeekText}>Use demo week</Text>
+          </Pressable>
+        </View>
+
         {isCalendarConnected ? (
-          <View style={styles.connectedChip}>
-            <Text style={styles.connectedChipText}>Google Calendar synced</Text>
-          </View>
-        ) : (
-          <View style={styles.calendarActions}>
-            <Pressable
-              onPress={handleConnect}
-              disabled={connecting}
-              style={styles.syncButton}
-            >
-              <Text style={styles.syncButtonText}>
-                {connecting ? 'Syncing...' : '\uD83D\uDCC5  Sync Google Calendar'}
-              </Text>
-            </Pressable>
-            <Pressable onPress={useDemoWeek}>
-              <Text style={styles.demoLink}>or use a demo week</Text>
-            </Pressable>
-          </View>
-        )}
+          <Text style={styles.helperText}>Calendar connected. Tap Update calendar anytime to refresh events.</Text>
+        ) : null}
 
         {dayOrder.map((day, index) => {
           const anim = cardAnimations[index];
@@ -185,9 +209,7 @@ export function EventsScreen({
               ]}
             >
               <Text style={styles.dayLabel}>{formatDayHeader(weekDates[day])}</Text>
-              {summary ? (
-                <Text style={styles.calendarSummary}>{summary}</Text>
-              ) : null}
+              {summary ? <Text style={styles.calendarSummary}>{summary}</Text> : null}
               <View style={styles.pillRow}>
                 {eventTypeOptions.map((typeOption) => {
                   const selected = eventsByDay[day] === typeOption;
@@ -208,21 +230,21 @@ export function EventsScreen({
           );
         })}
 
-        {!canGenerate ? (
-          <Text style={styles.helperText}>
-            Add at least one garment (top, bottom, or dress) in Wardrobe to generate outfits.
-          </Text>
-        ) : null}
+        {blockerText ? <Text style={styles.helperText}>{blockerText}</Text> : null}
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
+        <Pressable onPress={onBackToWardrobe} style={styles.secondaryButton}>
+          <Text style={styles.secondaryButtonText}>Back to wardrobe</Text>
+        </Pressable>
+
         <Pressable
           onPress={handleGenerate}
-          disabled={generating || !canGenerate}
+          disabled={!canGenerate}
           style={[styles.primaryButton, !canGenerate && styles.primaryButtonDisabled]}
         >
           <Text style={styles.primaryButtonText}>
-            {generating ? 'Generating your week...' : 'Generate my outfits'}
+            {generating ? 'Generating your week...' : 'Next: Generate outfits'}
           </Text>
         </Pressable>
       </ScrollView>
@@ -259,41 +281,42 @@ const styles = StyleSheet.create({
     color: palette.muted,
     fontFamily: type.body,
   },
-  calendarActions: {
+  actionsRow: {
     marginTop: 2,
+    flexDirection: 'row',
     gap: 8,
-    alignItems: 'center',
   },
-  syncButton: {
-    width: '100%',
-    borderRadius: radius.pill,
-    backgroundColor: palette.accent,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  syncButtonText: {
-    color: '#f4f4f2',
-    fontFamily: type.bodyDemi,
-    fontSize: 14,
-  },
-  demoLink: {
-    color: palette.muted,
-    fontSize: 12,
-    fontFamily: type.bodyMedium,
-    textDecorationLine: 'underline',
-  },
-  connectedChip: {
-    alignSelf: 'flex-start',
+  connectButton: {
+    flex: 1,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: '#4caf50',
-    backgroundColor: '#e8f5e9',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginTop: 2,
+    borderColor: palette.lineStrong,
+    backgroundColor: palette.panel,
+    paddingVertical: 10,
+    alignItems: 'center',
   },
-  connectedChipText: {
-    color: '#2e7d32',
+  connectButtonActive: {
+    backgroundColor: palette.accent,
+    borderColor: palette.accent,
+  },
+  connectButtonText: {
+    color: palette.ink,
+    fontFamily: type.bodyDemi,
+    fontSize: 13,
+  },
+  connectButtonTextActive: {
+    color: palette.textOnAccent,
+  },
+  demoWeekButton: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    backgroundColor: palette.accentSoft,
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+  },
+  demoWeekText: {
+    color: palette.inkSoft,
     fontSize: 12,
     fontFamily: type.bodyDemi,
   },
@@ -339,7 +362,7 @@ const styles = StyleSheet.create({
     fontFamily: type.bodyMedium,
   },
   pillTextSelected: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
   },
   helperText: {
     color: palette.muted,
@@ -359,10 +382,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryButtonDisabled: {
-    opacity: 0.5,
+    opacity: 0.45,
   },
   primaryButtonText: {
-    color: '#f4f4f2',
+    color: palette.textOnAccent,
+    fontSize: 14,
+    fontFamily: type.bodyDemi,
+  },
+  secondaryButton: {
+    marginTop: 6,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.ink,
+    backgroundColor: palette.accentSoft,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  secondaryButtonText: {
+    color: palette.ink,
     fontSize: 14,
     fontFamily: type.bodyDemi,
   },

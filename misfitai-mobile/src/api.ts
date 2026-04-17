@@ -27,6 +27,10 @@ export const USE_MOCK_API =
       ? false
       : __DEV__;
 
+const VISION_REQUEST_RETRIES = 2;
+const VISION_RETRY_BACKOFF_MS = 450;
+const VISION_FILE_FETCH_TIMEOUT_MS = 45000;
+
 /** After OAuth login, record user for GET /api/metrics ``signups`` (no wardrobe required). */
 export function registerSignupWithBackend(userId: string): void {
   if (!userId?.trim() || USE_MOCK_API) return;
@@ -132,6 +136,7 @@ export interface VisionAddPayload {
   imageUri: string;
   fileName?: string;
   mimeType?: string;
+  fileSize?: number;
 }
 
 export interface VisionPreviewItem {
@@ -564,6 +569,88 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return JSON.parse(rawBody) as T;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetryApiError(error: unknown): boolean {
+  if (!isApiError(error)) {
+    return true;
+  }
+  return [408, 425, 429, 500, 502, 503, 504].includes(error.status);
+}
+
+async function requestJsonWithRetry<T>(
+  path: string,
+  init: RequestInit,
+  retries: number
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await requestJson<T>(path, init);
+    } catch (error) {
+      if (attempt >= retries || !shouldRetryApiError(error)) {
+        throw error;
+      }
+      await sleep(VISION_RETRY_BACKOFF_MS * 2 ** attempt);
+      attempt += 1;
+    }
+  }
+}
+
+async function readImageBlobWithRetry(payload: VisionAddPayload): Promise<Blob> {
+  let attempt = 0;
+  while (true) {
+    try {
+      const controller =
+        typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller
+        ? setTimeout(() => controller.abort(), VISION_FILE_FETCH_TIMEOUT_MS)
+        : null;
+      try {
+        const response = await fetch(
+          payload.imageUri,
+          controller ? { signal: controller.signal } : undefined
+        );
+        if (!response.ok) {
+          throw new Error(`Failed to read selected image (${response.status}).`);
+        }
+        return await response.blob();
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      }
+    } catch (error) {
+      if (attempt >= VISION_REQUEST_RETRIES) {
+        throw error;
+      }
+      await sleep(VISION_RETRY_BACKOFF_MS * 2 ** attempt);
+      attempt += 1;
+    }
+  }
+}
+
+function getVisionUploadFileName(payload: VisionAddPayload): string {
+  if (payload.fileName?.trim()) {
+    return payload.fileName.trim();
+  }
+  const normalizedMimeType = payload.mimeType?.trim().toLowerCase();
+  let extension = 'jpg';
+  if (normalizedMimeType === 'image/png') {
+    extension = 'png';
+  } else if (
+    normalizedMimeType === 'image/jpeg' ||
+    normalizedMimeType === 'image/jpg'
+  ) {
+    extension = 'jpg';
+  } else if (normalizedMimeType === 'image/webp') {
+    extension = 'webp';
+  }
+  return `wardrobe-upload-${Date.now()}.${extension}`;
+}
+
 export async function getWardrobe(userId: string): Promise<Garment[]> {
   if (USE_MOCK_API) {
     return mockGetWardrobe(userId);
@@ -612,23 +699,19 @@ export async function addGarmentFromVision(
     return [await mockAddGarmentFromVision(userId, payload)];
   }
 
-  const fileResponse = await fetch(payload.imageUri);
-  const blob = await fileResponse.blob();
+  const blob = await readImageBlobWithRetry(payload);
 
   const formData = new FormData();
   formData.append('user_id', userId);
-  formData.append(
-    'file',
-    blob,
-    payload.fileName || `wardrobe-upload-${Date.now()}.jpg`
-  );
+  formData.append('file', blob, getVisionUploadFileName(payload));
 
-  const response = await requestJson<WardrobeApiItem[]>(
+  const response = await requestJsonWithRetry<WardrobeApiItem[]>(
     '/vision/extract',
     {
       method: 'POST',
       body: formData,
-    }
+    },
+    VISION_REQUEST_RETRIES
   );
   if (!Array.isArray(response)) {
     return [];
@@ -645,23 +728,19 @@ export async function previewGarmentsFromVision(
     return [];
   }
 
-  const fileResponse = await fetch(payload.imageUri);
-  const blob = await fileResponse.blob();
+  const blob = await readImageBlobWithRetry(payload);
 
   const formData = new FormData();
   formData.append('user_id', userId);
-  formData.append(
-    'file',
-    blob,
-    payload.fileName || `wardrobe-upload-${Date.now()}.jpg`
-  );
+  formData.append('file', blob, getVisionUploadFileName(payload));
 
-  const response = await requestJson<VisionPreviewItem[]>(
+  const response = await requestJsonWithRetry<VisionPreviewItem[]>(
     '/vision/extract-preview',
     {
       method: 'POST',
       body: formData,
-    }
+    },
+    VISION_REQUEST_RETRIES
   );
   return Array.isArray(response) ? response : [];
 }
@@ -674,14 +753,15 @@ export async function commitVisionItems(
     return [];
   }
 
-  const response = await requestJson<WardrobeApiItem[]>(
+  const response = await requestJsonWithRetry<WardrobeApiItem[]>(
     `/vision/commit?user_id=${encodeURIComponent(userId)}`,
     {
       method: 'POST',
       body: JSON.stringify({
         items,
       }),
-    }
+    },
+    VISION_REQUEST_RETRIES
   );
   return Array.isArray(response) ? response.map(mapGarment) : [];
 }
