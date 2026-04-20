@@ -260,7 +260,9 @@ export function AppStateProvider({
 
   const syncCalendarEvents = useCallback(async () => {
     if (!googleAccessToken) {
-      throw new Error('No Google access token available. Please sign in with Google again.');
+      throw new Error(
+        'Calendar sync needs Google sign-in with calendar access. Use “Use demo week” or pick event types for each day instead.'
+      );
     }
     let result;
     try {

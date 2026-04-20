@@ -81,8 +81,7 @@ export function ProfileSetupScreen({
         <Text style={styles.brand}>misfitAI</Text>
         <Text style={styles.title}>A quick question</Text>
         <Text style={styles.subtitle}>
-          We no longer pull birthday or gender from Google. Add them here (optional) so we can
-          personalize your experience.
+          Optional — helps tailor recommendations.
         </Text>
 
         <View style={styles.card}>

@@ -10,7 +10,8 @@ Aggregate product metrics for an internal dashboard.
   Formspree Submissions API (paid plans); else CSV URL; else Supabase ``waitlist`` table.
 - **page_views** / **active_users**: Google Analytics 4, when ``GA4_PROPERTY_ID``
   and Application Default Credentials (or ``GOOGLE_APPLICATION_CREDENTIALS``)
-  are configured.
+  are configured. GA4 ``activeUsers`` can exceed **signups** because it counts
+  all property traffic (including anonymous), not only registered app users.
 
 Until GA4 or Supabase credentials are wired for production, numeric fields fall
 back to ``0`` so callers always receive a stable JSON shape.

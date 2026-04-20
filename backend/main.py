@@ -35,7 +35,7 @@ from .models import (
     MediaType,
     WeekEvent,
 )
-from .routers import analytics_router, recommendations, weather_router, calendar_router
+from .routers import analytics_router, auth_router, recommendations, weather_router, calendar_router
 from .routers.analytics_router import public_metrics_router
 from .storage import get_wardrobe, get_week_events as _storage_get_week_events, store_week_events
 
@@ -71,6 +71,7 @@ app.add_middleware(
 )
 
 app.include_router(recommendations.router)
+app.include_router(auth_router.router)
 app.include_router(weather_router.router)
 app.include_router(calendar_router.router)
 app.include_router(analytics_router.router)

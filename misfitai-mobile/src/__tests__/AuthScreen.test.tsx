@@ -10,14 +10,8 @@ describe('AuthScreen', () => {
   });
 
   it('renders the sign-in heading', () => {
-    const { getByText } = render(
-      <AuthScreen onAuthenticated={mockOnAuthenticated} />,
-    );
-    // The screen should contain some auth-related text
-    const screen = render(
-      <AuthScreen onAuthenticated={mockOnAuthenticated} />,
-    );
-    expect(screen.toJSON()).toBeTruthy();
+    const { getByText } = render(<AuthScreen onAuthenticated={mockOnAuthenticated} />);
+    expect(getByText('Welcome back')).toBeTruthy();
   });
 
   it('renders Google sign-in button', () => {
@@ -33,10 +27,14 @@ describe('AuthScreen', () => {
     expect(mockOnAuthenticated).not.toHaveBeenCalled();
   });
 
-  it('renders without crashing with mode prop', () => {
-    const { toJSON } = render(
-      <AuthScreen onAuthenticated={mockOnAuthenticated} mode="signup" />,
-    );
-    expect(toJSON()).toBeTruthy();
+  it('switches to sign up copy when Sign up is pressed', () => {
+    const { getByText } = render(<AuthScreen onAuthenticated={mockOnAuthenticated} />);
+    fireEvent.press(getByText('Sign up'));
+    expect(getByText('Create your account')).toBeTruthy();
+  });
+
+  it('shows email fields', () => {
+    const { getByPlaceholderText } = render(<AuthScreen onAuthenticated={mockOnAuthenticated} />);
+    expect(getByPlaceholderText('you@example.com')).toBeTruthy();
   });
 });

@@ -30,7 +30,7 @@ class AnalyticsSummaryResponse(BaseModel):
         description="max(Auth users, analytics_registered_users from POST /analytics/register, distinct wardrobe user_id)."
     )
     active_users: int = Field(
-        description="GA4 activeUsers over the rolling ``period_days`` window."
+        description="GA4 activeUsers over the rolling ``period_days`` window (all property traffic)."
     )
     waitlist: int = Field(
         description="Formspree submission count, or CSV URL rows, or Supabase waitlist table (see env docs)."

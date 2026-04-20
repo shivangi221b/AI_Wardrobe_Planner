@@ -18,6 +18,7 @@ Pillow
 pillow-heif
 python-multipart
 supabase
+bcrypt
 google-analytics-data
 
 # Testing
