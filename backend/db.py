@@ -22,6 +22,12 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+_BCRYPT_PASSWORD_MAX_BYTES = 72
+
+
+def _password_within_bcrypt_limit(password_plain: str) -> bool:
+    return len(password_plain.encode("utf-8")) <= _BCRYPT_PASSWORD_MAX_BYTES
+
 _local_wardrobes: dict[str, List[GarmentItem]] = {}
 _local_measurements: dict[str, BodyMeasurements] = {}
 # OAuth logins (no Supabase Auth): POST /analytics/register fills this in local dev.
@@ -130,6 +136,8 @@ def create_password_user(email_normalized: str, password_plain: str) -> Password
     if not is_valid_login_email(email_normalized):
         raise ValueError("invalid_email")
     if len(password_plain) < 8:
+        raise ValueError("weak_password")
+    if not _password_within_bcrypt_limit(password_plain):
         raise ValueError("weak_password")
 
     if get_password_user_by_email(email_normalized):
