@@ -1,15 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
+  KeyboardAvoidingView,
   Platform,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
+import { getApiErrorMessage, loginEmailPassword, registerEmailPassword } from './api';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { palette, radius, type } from './theme';
 
@@ -20,7 +25,7 @@ const AppleAuthentication =
 WebBrowser.maybeCompleteAuthSession();
 
 export type AuthMode = 'login' | 'signup';
-export type AuthProvider = 'apple' | 'google';
+export type AuthProvider = 'apple' | 'google' | 'email';
 
 /** Profile we collect from Google (People API) or Apple. Used for styling and DB user identity. */
 export type UserProfile = {
@@ -69,6 +74,10 @@ export function AuthScreen({
 }) {
   const [mode, setMode] = useState<AuthMode>('login');
   const [loadingProvider, setLoadingProvider] = useState<AuthProvider | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
 
   // Pass a placeholder ID when unconfigured so the hook doesn't throw.
   // The button is disabled via `googleConfigured` below.
@@ -194,6 +203,47 @@ export function AuthScreen({
     }
   }, [googlePromptAsync]);
 
+  useEffect(() => {
+    setEmailError(null);
+  }, [mode]);
+
+  const handleEmailAuth = useCallback(async () => {
+    setEmailError(null);
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !trimmedEmail.includes('@')) {
+      setEmailError('Enter a valid email address.');
+      return;
+    }
+    if (password.length < 8) {
+      setEmailError('Password must be at least 8 characters.');
+      return;
+    }
+    if (mode === 'signup' && password !== confirmPassword) {
+      setEmailError('Passwords do not match.');
+      return;
+    }
+    try {
+      setLoadingProvider('email');
+      const result =
+        mode === 'signup'
+          ? await registerEmailPassword(trimmedEmail, password)
+          : await loginEmailPassword(trimmedEmail, password);
+      const profile: UserProfile = {
+        id: result.userId,
+        email: result.email,
+        displayName: null,
+        photoUrl: null,
+        gender: null,
+        birthday: null,
+      };
+      onAuthenticated('email', mode, profile);
+    } catch (err: unknown) {
+      setEmailError(getApiErrorMessage(err, mode === 'signup' ? 'Could not sign up.' : 'Could not sign in.'));
+    } finally {
+      setLoadingProvider(null);
+    }
+  }, [confirmPassword, email, mode, onAuthenticated, password]);
+
   const animatedStyle = {
     opacity: entrance,
     transform: [
@@ -206,69 +256,142 @@ export function AuthScreen({
     ],
   };
 
+  const busy = loadingProvider !== null;
+
   return (
     <SafeAreaView style={styles.safe}>
       <AtmosphereBackground />
-      <Animated.View style={[styles.container, animatedStyle]}>
-        <View style={styles.header}>
-          <Text style={styles.brand}>misfitAI</Text>
-          <Text style={styles.title}>
-            {mode === 'login' ? 'Welcome back' : 'Create your account'}
-          </Text>
-          <Text style={styles.subtitle}>
-            {mode === 'login'
-              ? 'Sign in to continue planning your weekly looks.'
-              : 'Sign up to start building your digital wardrobe.'}
-          </Text>
-        </View>
-
-        <View style={styles.modeSwitch}>
-          <Pressable
-            onPress={() => setMode('login')}
-            style={[styles.modeButton, mode === 'login' && styles.modeButtonActive]}
-          >
-            <Text style={[styles.modeButtonText, mode === 'login' && styles.modeButtonTextActive]}>
-              Log in
-            </Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setMode('signup')}
-            style={[styles.modeButton, mode === 'signup' && styles.modeButtonActive]}
-          >
-            <Text style={[styles.modeButtonText, mode === 'signup' && styles.modeButtonTextActive]}>
-              Sign up
-            </Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.authCard}>
-          {Platform.OS === 'ios' && (
-            <Pressable
-              onPress={handleAppleAuth}
-              disabled={loadingProvider !== null}
-              style={[styles.providerButton, styles.providerButtonPrimary]}
-            >
-              <Text style={styles.providerButtonPrimaryText}>
-                {loadingProvider === 'apple' ? 'Connecting Apple...' : 'Continue with Apple'}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <Animated.View style={[styles.container, animatedStyle]}>
+            <View style={styles.header}>
+              <Text style={styles.brand}>misfitAI</Text>
+              <Text style={styles.title}>
+                {mode === 'login' ? 'Welcome back' : 'Create your account'}
               </Text>
-            </Pressable>
-          )}
+              <Text style={styles.subtitle}>
+                {mode === 'login'
+                  ? 'Sign in to continue planning your weekly looks.'
+                  : 'Sign up to start building your digital wardrobe.'}
+              </Text>
+            </View>
 
-          <Pressable
-            onPress={handleGoogleAuth}
-            disabled={loadingProvider !== null || !googleRequest || !googleConfigured}
-            style={[styles.providerButton, !googleConfigured && { opacity: 0.4 }]}
-          >
-            <Text style={styles.providerButtonText}>
-              {!googleConfigured
-                ? 'Google (client ID not configured)'
-                : loadingProvider === 'google'
-                  ? 'Connecting Google...'
-                  : 'Continue with Google'}
-            </Text>
-          </Pressable>
-        </View>
-      </Animated.View>
+            <View style={styles.modeSwitch}>
+              <Pressable
+                onPress={() => setMode('login')}
+                style={[styles.modeButton, mode === 'login' && styles.modeButtonActive]}
+              >
+                <Text style={[styles.modeButtonText, mode === 'login' && styles.modeButtonTextActive]}>
+                  Log in
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setMode('signup')}
+                style={[styles.modeButton, mode === 'signup' && styles.modeButtonActive]}
+              >
+                <Text style={[styles.modeButtonText, mode === 'signup' && styles.modeButtonTextActive]}>
+                  Sign up
+                </Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.authCard}>
+              <Text style={styles.sectionLabel}>Email</Text>
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                textContentType="emailAddress"
+                placeholder="you@example.com"
+                placeholderTextColor={palette.muted}
+                editable={!busy}
+                style={styles.input}
+              />
+              <Text style={styles.sectionLabel}>Password</Text>
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                textContentType={mode === 'login' ? 'password' : 'newPassword'}
+                placeholder="At least 8 characters"
+                placeholderTextColor={palette.muted}
+                editable={!busy}
+                style={styles.input}
+              />
+              {mode === 'signup' ? (
+                <>
+                  <Text style={styles.sectionLabel}>Confirm password</Text>
+                  <TextInput
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    secureTextEntry
+                    textContentType="newPassword"
+                    placeholder="Re-enter password"
+                    placeholderTextColor={palette.muted}
+                    editable={!busy}
+                    style={styles.input}
+                  />
+                </>
+              ) : null}
+
+              {emailError ? <Text style={styles.errorText}>{emailError}</Text> : null}
+
+              <Pressable
+                onPress={handleEmailAuth}
+                disabled={busy}
+                style={[styles.providerButton, styles.providerButtonPrimary, busy && styles.buttonDisabled]}
+              >
+                {loadingProvider === 'email' ? (
+                  <ActivityIndicator color={palette.textOnAccent} />
+                ) : (
+                  <Text style={styles.providerButtonPrimaryText}>
+                    {mode === 'signup' ? 'Create account' : 'Continue with email'}
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+
+            <Text style={styles.dividerLabel}>or continue with</Text>
+
+            <View style={styles.authCard}>
+              {Platform.OS === 'ios' && (
+                <Pressable
+                  onPress={handleAppleAuth}
+                  disabled={busy}
+                  style={[styles.providerButton, styles.providerButtonPrimary, busy && styles.buttonDisabled]}
+                >
+                  <Text style={styles.providerButtonPrimaryText}>
+                    {loadingProvider === 'apple' ? 'Connecting Apple...' : 'Continue with Apple'}
+                  </Text>
+                </Pressable>
+              )}
+
+              <Pressable
+                onPress={handleGoogleAuth}
+                disabled={busy || !googleRequest || !googleConfigured}
+                style={[styles.providerButton, !googleConfigured && { opacity: 0.4 }, busy && styles.buttonDisabled]}
+              >
+                <Text style={styles.providerButtonText}>
+                  {!googleConfigured
+                    ? 'Google (client ID not configured)'
+                    : loadingProvider === 'google'
+                      ? 'Connecting Google...'
+                      : 'Continue with Google'}
+                </Text>
+              </Pressable>
+            </View>
+          </Animated.View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -277,6 +400,13 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: palette.bg,
+  },
+  flex: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 32,
   },
   container: {
     flex: 1,
@@ -334,6 +464,39 @@ const styles = StyleSheet.create({
   modeButtonTextActive: {
     color: palette.textOnAccent,
   },
+  sectionLabel: {
+    fontSize: 12,
+    fontFamily: type.bodyDemi,
+    color: palette.inkSoft,
+    marginBottom: 4,
+    marginTop: 4,
+  },
+  input: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    backgroundColor: palette.panelStrong,
+    paddingHorizontal: 14,
+    paddingVertical: Platform.OS === 'ios' ? 12 : 10,
+    fontSize: 15,
+    fontFamily: type.body,
+    color: palette.ink,
+    marginBottom: 4,
+  },
+  errorText: {
+    color: palette.error,
+    fontSize: 13,
+    fontFamily: type.bodyMedium,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  dividerLabel: {
+    textAlign: 'center',
+    fontSize: 12,
+    fontFamily: type.bodyMedium,
+    color: palette.muted,
+    marginVertical: 12,
+  },
   authCard: {
     borderRadius: 24,
     borderWidth: 1,
@@ -341,6 +504,9 @@ const styles = StyleSheet.create({
     backgroundColor: palette.panel,
     padding: 14,
     gap: 8,
+  },
+  buttonDisabled: {
+    opacity: 0.55,
   },
   providerButton: {
     borderRadius: radius.pill,

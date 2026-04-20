@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend import analytics_metrics as am
 from backend.analytics_metrics import (
     _csv_row_is_nonempty,
     _env_truthy,
@@ -65,6 +66,21 @@ class TestBuildAnalyticsSummary:
         monkeypatch.setenv("ANALYTICS_USE_DUMMY_METRICS", "true")
         summary = build_analytics_summary(period_days=9999)
         assert summary["period_days"] == 366
+
+    def test_active_users_is_raw_ga4_not_capped_vs_signups(self, monkeypatch):
+        monkeypatch.delenv("ANALYTICS_USE_DUMMY_METRICS", raising=False)
+        monkeypatch.delenv("SUPABASE_URL", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        monkeypatch.delenv("FORMSPREE_FORM_ID", raising=False)
+        monkeypatch.delenv("WAITLIST_SHEET_CSV_URL", raising=False)
+        monkeypatch.setattr(am, "count_signups", lambda: 18)
+        monkeypatch.setattr(am, "count_waitlist_rows", lambda: 0)
+        monkeypatch.setattr(am, "fetch_ga4_screen_metrics", lambda days: (200, 45))
+
+        summary = build_analytics_summary(period_days=28)
+        assert summary["signups"] == 18
+        assert summary["active_users"] == 45
+        assert summary["page_views"] == 200
 
 
 class TestCountSignups:

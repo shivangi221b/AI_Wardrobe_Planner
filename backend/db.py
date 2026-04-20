@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime
 from functools import lru_cache
-from typing import Any, List, Optional
+from typing import Any, List, Optional, TypedDict
 
+import bcrypt
 from supabase import Client, create_client
 
 from .models import (
@@ -20,10 +22,27 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+_BCRYPT_PASSWORD_MAX_BYTES = 72
+
+
+def _password_within_bcrypt_limit(password_plain: str) -> bool:
+    return len(password_plain.encode("utf-8")) <= _BCRYPT_PASSWORD_MAX_BYTES
+
 _local_wardrobes: dict[str, List[GarmentItem]] = {}
 _local_measurements: dict[str, BodyMeasurements] = {}
 # OAuth logins (no Supabase Auth): POST /analytics/register fills this in local dev.
 _local_signup_user_ids: set[str] = set()
+# Email/password users when Supabase is unavailable or table writes fall back (see create_password_user).
+_local_app_users_by_email: dict[str, dict[str, str]] = {}
+
+
+class PasswordUserRow(TypedDict):
+    user_id: str
+    email: str
+    password_hash: str
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 @lru_cache(maxsize=1)
@@ -54,6 +73,118 @@ def _measurements_table_name() -> str:
 
 def _signup_registry_table() -> str:
     return (os.getenv("SUPABASE_SIGNUPS_TABLE") or "analytics_registered_users").strip() or "analytics_registered_users"
+
+
+def _app_users_table() -> str:
+    return (os.getenv("SUPABASE_APP_USERS_TABLE") or "app_users").strip() or "app_users"
+
+
+def normalize_login_email(email: str) -> str:
+    """Lowercase trimmed email for lookups (must match mobile ``deriveUserIdFromProfile`` input)."""
+    return (email or "").strip().lower()
+
+
+def user_id_from_email(email_normalized: str) -> str:
+    """Same stable id the Expo app uses when profile.email is set without OAuth ``sub``."""
+    return "email-" + email_normalized.replace("@", "-at-").replace(".", "-dot-")
+
+
+def is_valid_login_email(email: str) -> bool:
+    normalized = normalize_login_email(email)
+    if not normalized or len(normalized) > 254:
+        return False
+    return bool(_EMAIL_RE.match(normalized))
+
+
+def get_password_user_by_email(email_normalized: str) -> Optional[PasswordUserRow]:
+    if _use_local_store():
+        row = _local_app_users_by_email.get(email_normalized)
+        if not row:
+            return None
+        return {
+            "user_id": row["user_id"],
+            "email": row["email"],
+            "password_hash": row["password_hash"],
+        }
+    try:
+        result = (
+            get_supabase_client()
+            .table(_app_users_table())
+            .select("user_id,email,password_hash")
+            .eq("email", email_normalized)
+            .maybe_single()
+            .execute()
+        )
+        data = result.data
+        if not isinstance(data, dict):
+            return None
+        uid = data.get("user_id")
+        em = data.get("email")
+        ph = data.get("password_hash")
+        if not uid or not em or not ph:
+            return None
+        return {"user_id": str(uid), "email": str(em), "password_hash": str(ph)}
+    except Exception:
+        logger.exception("get_password_user_by_email failed email=%r", email_normalized[:80])
+        return None
+
+
+def create_password_user(email_normalized: str, password_plain: str) -> PasswordUserRow:
+    """
+    Create a new email/password row. Raises ``ValueError("email_taken")`` if the email exists.
+    """
+    if not is_valid_login_email(email_normalized):
+        raise ValueError("invalid_email")
+    if len(password_plain) < 8:
+        raise ValueError("weak_password")
+    if not _password_within_bcrypt_limit(password_plain):
+        raise ValueError("weak_password")
+
+    if get_password_user_by_email(email_normalized):
+        raise ValueError("email_taken")
+
+    pw_hash = bcrypt.hashpw(password_plain.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+    user_id = user_id_from_email(email_normalized)
+    row: PasswordUserRow = {"user_id": user_id, "email": email_normalized, "password_hash": pw_hash}
+
+    if _use_local_store():
+        _local_app_users_by_email[email_normalized] = {
+            "user_id": user_id,
+            "email": email_normalized,
+            "password_hash": pw_hash,
+        }
+        return row
+
+    try:
+        get_supabase_client().table(_app_users_table()).insert(
+            {
+                "user_id": user_id,
+                "email": email_normalized,
+                "password_hash": pw_hash,
+            }
+        ).execute()
+        return row
+    except Exception:
+        logger.exception("create_password_user insert failed email=%r", email_normalized[:80])
+        raise
+
+
+def verify_password_user(email_normalized: str, password_plain: str) -> Optional[str]:
+    """
+    Return ``user_id`` when credentials match, else ``None``.
+    """
+    row = get_password_user_by_email(email_normalized)
+    if not row:
+        return None
+    try:
+        ok = bcrypt.checkpw(
+            password_plain.encode("utf-8"),
+            row["password_hash"].encode("ascii"),
+        )
+    except Exception:
+        logger.exception("verify_password_user bcrypt failed user_id=%r", row["user_id"][:40])
+        return None
+    return row["user_id"] if ok else None
 
 
 def register_signup_user_id(user_id: str) -> None:
