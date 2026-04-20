@@ -6,10 +6,11 @@ create table if not exists public.app_users (
   email text not null unique,
   password_hash text not null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint app_users_email_lower_chk check (email = lower(email))
 );
 
-create index if not exists app_users_email_lower_idx on public.app_users (lower(email));
+create unique index if not exists app_users_email_lower_idx on public.app_users (lower(email));
 
 comment on table public.app_users is
   'Email/password signups; user_id matches app wardrobe API key (email-… slug).';
