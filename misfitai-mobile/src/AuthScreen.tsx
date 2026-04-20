@@ -484,7 +484,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   errorText: {
-    color: '#b42318',
+    color: palette.error,
     fontSize: 13,
     fontFamily: type.bodyMedium,
     marginTop: 6,
