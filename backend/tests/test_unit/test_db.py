@@ -9,19 +9,24 @@ import pytest
 from backend.db import (
     _local_wardrobes,
     _local_signup_user_ids,
+    _local_user_profiles,
     _parse_category,
     _parse_datetime,
     _parse_formality,
     _parse_rpc_scalar_int,
     _parse_seasonality,
     _row_to_garment,
+    _row_to_user_profile,
     _use_local_store,
     count_registered_signups,
+    get_user_profile,
     get_wardrobe,
     insert_garment,
     register_signup_user_id,
+    upsert_user_profile,
 )
 from backend.models import (
+    AvatarConfig,
     GarmentCategory,
     GarmentFormality,
     GarmentItem,
@@ -36,9 +41,11 @@ _NOW = datetime(2026, 4, 14, 12, 0, 0, tzinfo=timezone.utc)
 def _clear_local_stores():
     _local_wardrobes.clear()
     _local_signup_user_ids.clear()
+    _local_user_profiles.clear()
     yield
     _local_wardrobes.clear()
     _local_signup_user_ids.clear()
+    _local_user_profiles.clear()
 
 
 class TestUseLocalStore:
@@ -229,3 +236,110 @@ class TestSignupRegistry:
     def test_overlong_ignored(self):
         register_signup_user_id("x" * 600)
         assert count_registered_signups() == 0
+
+
+# ---------------------------------------------------------------------------
+# User profile helpers
+# ---------------------------------------------------------------------------
+
+
+class TestRowToUserProfile:
+    def test_minimal_row(self):
+        row = {"user_id": "u1", "updated_at": "2026-04-14T12:00:00Z"}
+        p = _row_to_user_profile(row)
+        assert p.user_id == "u1"
+        assert p.avatar_config is None
+        assert p.favorite_colors == []
+        assert p.avoided_colors == []
+
+    def test_avatar_config_dict_parsed(self):
+        row = {
+            "user_id": "u1",
+            "avatar_config": {
+                "hair_style": "long_straight",
+                "hair_color": "black",
+                "body_type": "slim",
+                "skin_tone": "medium",
+                "avatar_image_url": "https://example.com/avatar.jpg",
+            },
+        }
+        p = _row_to_user_profile(row)
+        assert p.avatar_config is not None
+        assert p.avatar_config.hair_style == "long_straight"
+        assert p.avatar_config.skin_tone == "medium"
+        assert p.avatar_config.avatar_image_url == "https://example.com/avatar.jpg"
+
+    def test_avatar_config_none_stays_none(self):
+        row = {"user_id": "u1", "avatar_config": None}
+        p = _row_to_user_profile(row)
+        assert p.avatar_config is None
+
+    def test_avatar_config_string_ignored(self):
+        # Non-dict values (e.g., corrupt data) should not crash.
+        row = {"user_id": "u1", "avatar_config": "invalid"}
+        p = _row_to_user_profile(row)
+        assert p.avatar_config is None
+
+    def test_color_lists_parsed(self):
+        row = {
+            "user_id": "u1",
+            "favorite_colors": ["navy", "white"],
+            "avoided_colors": ["red"],
+        }
+        p = _row_to_user_profile(row)
+        assert p.favorite_colors == ["navy", "white"]
+        assert p.avoided_colors == ["red"]
+
+
+class TestLocalStoreUserProfile:
+    @pytest.fixture(autouse=True)
+    def _ensure_local(self, monkeypatch):
+        monkeypatch.delenv("SUPABASE_URL", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+
+    def test_get_returns_none_when_missing(self):
+        assert get_user_profile("nobody") is None
+
+    def test_upsert_creates_new_profile(self):
+        p = upsert_user_profile("u1", {"gender": "female", "skin_tone": "light"})
+        assert p.user_id == "u1"
+        assert p.gender == "female"
+        assert p.skin_tone == "light"
+
+    def test_upsert_partial_does_not_clobber(self):
+        upsert_user_profile("u1", {"gender": "female", "shoe_size": "38"})
+        upsert_user_profile("u1", {"shoe_size": "39"})
+        p = get_user_profile("u1")
+        assert p is not None
+        assert p.gender == "female"
+        assert p.shoe_size == "39"
+
+    def test_explicit_none_clears_field(self):
+        upsert_user_profile("u1", {"skin_tone": "medium"})
+        upsert_user_profile("u1", {"skin_tone": None})
+        p = get_user_profile("u1")
+        assert p is not None
+        assert p.skin_tone is None
+
+    def test_avatar_config_model_serialised_and_round_tripped(self):
+        cfg = AvatarConfig(
+            hair_style="curly_afro",
+            hair_color="auburn",
+            body_type="average",
+            skin_tone="dark",
+            avatar_image_url="https://example.com/av.jpg",
+        )
+        upsert_user_profile("u1", {"avatar_config": cfg})
+        p = get_user_profile("u1")
+        assert p is not None
+        assert p.avatar_config is not None
+        assert p.avatar_config.hair_style == "curly_afro"
+        assert p.avatar_config.avatar_image_url == "https://example.com/av.jpg"
+
+    def test_avatar_config_none_clears(self):
+        cfg = AvatarConfig(hair_style="short_wavy")
+        upsert_user_profile("u1", {"avatar_config": cfg})
+        upsert_user_profile("u1", {"avatar_config": None})
+        p = get_user_profile("u1")
+        assert p is not None
+        assert p.avatar_config is None

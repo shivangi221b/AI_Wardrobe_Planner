@@ -8,15 +8,58 @@ from backend.models import (
     GarmentCategory,
     GarmentFormality,
     GarmentItem,
+    UserProfile,
     WeekEvent,
+    build_garment_tags,
 )
 from backend.recommendation import (
+    _ColorPrefCtx,
     _display_name,
     _is_bottom,
     _is_top,
     _pick_garment,
+    _score_color_preference,
     generate_week_recommendations,
 )
+from datetime import datetime, timezone
+
+_NOW = datetime(2026, 4, 14, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _make_top(
+    id: str,
+    color: str | None,
+    formality: GarmentFormality = GarmentFormality.CASUAL,
+    size: str | None = None,
+) -> GarmentItem:
+    tags = build_garment_tags(GarmentCategory.TOP, formality)
+    return GarmentItem(
+        id=id,
+        user_id="u1",
+        primary_image_url="https://x.com/img.jpg",
+        category=GarmentCategory.TOP,
+        sub_category="shirt",
+        formality=formality,
+        color_primary=color,
+        size=size,
+        tags=tags,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+def _profile(
+    favorite_colors: list[str] | None = None,
+    avoided_colors: list[str] | None = None,
+    color_tone: str | None = None,
+) -> UserProfile:
+    return UserProfile(
+        user_id="u1",
+        favorite_colors=favorite_colors or [],
+        avoided_colors=avoided_colors or [],
+        color_tone=color_tone,
+        updated_at=_NOW,
+    )
 
 
 # -- helpers -----------------------------------------------------------------
@@ -141,3 +184,123 @@ class TestGenerateWeekRecommendations:
             top = next((g for g in mock_wardrobe if g.id == rec.top_id), None)
             assert top is not None
             assert top.formality in (GarmentFormality.FORMAL, GarmentFormality.BUSINESS)
+
+
+# -- Colour preference scoring ----------------------------------------------
+
+
+class TestColorPrefCtx:
+    def test_no_profile_zero_score(self):
+        ctx = _ColorPrefCtx(None)
+        item = _make_top("t1", "red")
+        assert ctx.score(item) == 0.0
+
+    def test_avoided_color_penalty(self):
+        ctx = _ColorPrefCtx(_profile(avoided_colors=["red"]))
+        item = _make_top("t1", "red")
+        assert ctx.score(item) < 0
+
+    def test_favorite_color_bonus(self):
+        ctx = _ColorPrefCtx(_profile(favorite_colors=["navy"]))
+        item = _make_top("t1", "navy")
+        assert ctx.score(item) > 0
+
+    def test_warm_tone_bonus(self):
+        ctx = _ColorPrefCtx(_profile(color_tone="warm"))
+        item = _make_top("t1", "rust")
+        assert ctx.score(item) > 0
+
+    def test_cool_tone_bonus(self):
+        ctx = _ColorPrefCtx(_profile(color_tone="cool"))
+        item = _make_top("t1", "teal")
+        assert ctx.score(item) > 0
+
+    def test_no_color_on_item_zero_score(self):
+        ctx = _ColorPrefCtx(_profile(favorite_colors=["blue"]))
+        item = _make_top("t1", None)
+        assert ctx.score(item) == 0.0
+
+    def test_score_color_preference_public_helper(self):
+        p = _profile(avoided_colors=["yellow"])
+        item = _make_top("t1", "yellow")
+        assert _score_color_preference(item, p) < 0
+
+
+class TestPickGarmentColourPriority:
+    """Verify the size-first, colour-second selection order."""
+
+    def test_avoided_colours_deprioritised_when_alternative_exists(self):
+        avoided = _make_top("avoided", "red", GarmentFormality.CASUAL)
+        clean = _make_top("clean", "navy", GarmentFormality.CASUAL)
+        profile = _profile(avoided_colors=["red"])
+        result = _pick_garment(
+            [avoided, clean],
+            _is_top,
+            [frozenset({"casual"})],
+            used_ids=set(),
+            user_profile=profile,
+        )
+        assert result is not None
+        assert result.id == "clean"
+
+    def test_avoided_item_returned_when_it_is_only_option(self):
+        avoided = _make_top("avoided", "red", GarmentFormality.CASUAL)
+        profile = _profile(avoided_colors=["red"])
+        result = _pick_garment(
+            [avoided],
+            _is_top,
+            [frozenset({"casual"})],
+            used_ids=set(),
+            user_profile=profile,
+        )
+        assert result is not None
+        assert result.id == "avoided"
+
+    def test_favourite_colour_preferred_as_tiebreak(self):
+        # Both items same formality, same times_recommended; fav colour wins.
+        plain = _make_top("plain", "grey", GarmentFormality.CASUAL)
+        fav = _make_top("fav", "navy", GarmentFormality.CASUAL)
+        profile = _profile(favorite_colors=["navy"])
+        result = _pick_garment(
+            [plain, fav],
+            _is_top,
+            [frozenset({"casual"})],
+            used_ids=set(),
+            user_profile=profile,
+        )
+        assert result is not None
+        assert result.id == "fav"
+
+    def test_sized_item_beats_avoided_colour_unsized(self):
+        """Size match trumps colour preference — a sized avoided item is preferred
+        over a not-avoided item that doesn't match the user's size."""
+        sized_avoided = _make_top("sized_avoided", "red", GarmentFormality.CASUAL, size="m")
+        unsized_clean = _make_top("unsized_clean", "navy", GarmentFormality.CASUAL, size=None)
+        profile = _profile(avoided_colors=["red"])
+        result = _pick_garment(
+            [sized_avoided, unsized_clean],
+            _is_top,
+            [frozenset({"casual"})],
+            used_ids=set(),
+            user_size_label="m",
+            user_profile=profile,
+        )
+        # The sized item should win even though its colour is avoided.
+        assert result is not None
+        assert result.id == "sized_avoided"
+
+    def test_sized_clean_beats_sized_avoided(self):
+        """When there is a sized AND not-avoided option, it should win."""
+        sized_avoided = _make_top("sized_avoided", "red", GarmentFormality.CASUAL, size="m")
+        sized_clean = _make_top("sized_clean", "navy", GarmentFormality.CASUAL, size="m")
+        profile = _profile(avoided_colors=["red"])
+        result = _pick_garment(
+            [sized_avoided, sized_clean],
+            _is_top,
+            [frozenset({"casual"})],
+            used_ids=set(),
+            user_size_label="m",
+            user_profile=profile,
+        )
+        assert result is not None
+        assert result.id == "sized_clean"

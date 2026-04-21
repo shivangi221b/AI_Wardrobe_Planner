@@ -250,18 +250,20 @@ interface Step1State {
 function Step1({
   state,
   onChange,
+  forceTouched = false,
 }: {
   state: Step1State;
   onChange: (patch: Partial<Step1State>) => void;
+  forceTouched?: boolean;
 }) {
   const [birthdayTouched, setBirthdayTouched] = useState(false);
   const [showMeasurements, setShowMeasurements] = useState(false);
 
   const birthdayError = useMemo(() => {
     const v = state.birthday.trim();
-    if (!birthdayTouched || !v) return null;
+    if (!(birthdayTouched || forceTouched) || !v) return null;
     return isValidBirthday(v) ? null : 'Use YYYY-MM-DD (e.g., 2001-04-07).';
-  }, [state.birthday, birthdayTouched]);
+  }, [state.birthday, birthdayTouched, forceTouched]);
 
   return (
     <>
@@ -663,6 +665,10 @@ export function ProfileSetupScreen({
     selfieUri: null,
   });
 
+  // Controlled "force-show errors" flag for Step 1's birthday field.
+  // Set to true when the user attempts to advance with an invalid date.
+  const [forceStep1Touched, setForceStep1Touched] = useState(false);
+
   function buildResult(skipped = false): ProfileSetupResult {
     const measurements: MeasurementFields = skipped
       ? { heightCm: null, weightKg: null, chestCm: null, waistCm: null, hipsCm: null, inseamCm: null }
@@ -710,6 +716,15 @@ export function ProfileSetupScreen({
   }
 
   function handleNext() {
+    // Guard: block advancement from Step 1 if the birthday field has a value
+    // but it fails validation.  Force the error UI to show.
+    if (step === 0) {
+      const bd = step1.birthday.trim();
+      if (bd && !isValidBirthday(bd)) {
+        setForceStep1Touched(true);
+        return;
+      }
+    }
     if (step < TOTAL_STEPS - 1) {
       setStep((s) => s + 1);
     } else {
@@ -739,6 +754,7 @@ export function ProfileSetupScreen({
           <Step1
             state={step1}
             onChange={(patch) => setStep1((s) => ({ ...s, ...patch }))}
+            forceTouched={forceStep1Touched}
           />
         )}
         {step === 1 && (

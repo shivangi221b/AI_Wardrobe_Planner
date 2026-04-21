@@ -28,6 +28,7 @@ class AvatarConfigBody(BaseModel):
     hair_color: Optional[str] = None
     body_type: Optional[str] = None
     skin_tone: Optional[str] = None
+    avatar_image_url: Optional[str] = None
 
 
 class UserProfileBody(BaseModel):
@@ -36,6 +37,11 @@ class UserProfileBody(BaseModel):
 
     All fields are optional so that callers can update any subset without
     knowing the full current state.
+
+    **Omitted vs explicit null**:  Pydantic records which fields were actually
+    supplied in the request via ``model_fields_set``.  The endpoint uses this
+    to distinguish "caller didn't mention the field" (leave unchanged) from
+    "caller explicitly sent ``null``" (clear the stored value).
     """
 
     gender: Optional[str] = None
@@ -74,27 +80,35 @@ async def update_profile(user_id: str, body: UserProfileBody) -> UserProfile:
     """
     Create or partially update the extended style profile for *user_id*.
 
-    Only explicitly provided (non-``null``) fields are written; omitted fields
-    are not touched on existing profiles.
+    Only fields **present in the request body** are written.  Omitted fields
+    are left unchanged on existing profiles.  Explicitly sending ``null``
+    clears the stored value (e.g. ``{"skin_tone": null}`` removes the tone
+    preference).
     """
     data: dict[str, Any] = {}
 
-    for field in ("gender", "birthday", "skin_tone", "color_tone", "shoe_size", "top_size", "bottom_size"):
-        value = getattr(body, field)
-        if value is not None:
-            data[field] = value
+    # Scalar / list fields — write only when the caller explicitly provided them
+    # (whether the value is a string, a list, or null).
+    for field in (
+        "gender", "birthday", "skin_tone", "color_tone",
+        "shoe_size", "top_size", "bottom_size",
+        "favorite_colors", "avoided_colors",
+    ):
+        if field in body.model_fields_set:
+            data[field] = getattr(body, field)
 
-    if body.favorite_colors is not None:
-        data["favorite_colors"] = body.favorite_colors
-    if body.avoided_colors is not None:
-        data["avoided_colors"] = body.avoided_colors
-
-    if body.avatar_config is not None:
-        data["avatar_config"] = AvatarConfig(
-            hair_style=body.avatar_config.hair_style,
-            hair_color=body.avatar_config.hair_color,
-            body_type=body.avatar_config.body_type,
-            skin_tone=body.avatar_config.skin_tone,
-        )
+    # avatar_config: null clears it; an object merges individual sub-fields.
+    if "avatar_config" in body.model_fields_set:
+        if body.avatar_config is None:
+            data["avatar_config"] = None
+        else:
+            av = body.avatar_config
+            data["avatar_config"] = AvatarConfig(
+                hair_style=av.hair_style,
+                hair_color=av.hair_color,
+                body_type=av.body_type,
+                skin_tone=av.skin_tone,
+                avatar_image_url=av.avatar_image_url,
+            )
 
     return upsert_user_profile(user_id, data)
