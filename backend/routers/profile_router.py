@@ -28,7 +28,6 @@ class AvatarConfigBody(BaseModel):
     hair_color: Optional[str] = None
     body_type: Optional[str] = None
     skin_tone: Optional[str] = None
-    avatar_image_url: Optional[str] = None
 
 
 class UserProfileBody(BaseModel):
@@ -108,7 +107,6 @@ async def update_profile(user_id: str, body: UserProfileBody) -> UserProfile:
                 hair_color=av.hair_color,
                 body_type=av.body_type,
                 skin_tone=av.skin_tone,
-                avatar_image_url=av.avatar_image_url,
             )
 
     return upsert_user_profile(user_id, data)

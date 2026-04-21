@@ -260,14 +260,12 @@ class TestRowToUserProfile:
                 "hair_color": "black",
                 "body_type": "slim",
                 "skin_tone": "medium",
-                "avatar_image_url": "https://example.com/avatar.jpg",
             },
         }
         p = _row_to_user_profile(row)
         assert p.avatar_config is not None
         assert p.avatar_config.hair_style == "long_straight"
         assert p.avatar_config.skin_tone == "medium"
-        assert p.avatar_config.avatar_image_url == "https://example.com/avatar.jpg"
 
     def test_avatar_config_none_stays_none(self):
         row = {"user_id": "u1", "avatar_config": None}
@@ -327,14 +325,13 @@ class TestLocalStoreUserProfile:
             hair_color="auburn",
             body_type="average",
             skin_tone="dark",
-            avatar_image_url="https://example.com/av.jpg",
         )
         upsert_user_profile("u1", {"avatar_config": cfg})
         p = get_user_profile("u1")
         assert p is not None
         assert p.avatar_config is not None
         assert p.avatar_config.hair_style == "curly_afro"
-        assert p.avatar_config.avatar_image_url == "https://example.com/av.jpg"
+        assert p.avatar_config.skin_tone == "dark"
 
     def test_avatar_config_none_clears(self):
         cfg = AvatarConfig(hair_style="short_wavy")

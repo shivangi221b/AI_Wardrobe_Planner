@@ -716,7 +716,6 @@ def _row_to_user_profile(row: dict[str, Any]) -> UserProfile:
             hair_color=avatar_raw.get("hair_color"),
             body_type=avatar_raw.get("body_type"),
             skin_tone=avatar_raw.get("skin_tone"),
-            avatar_image_url=avatar_raw.get("avatar_image_url"),
         )
 
     def _str_list(key: str) -> list[str]:
