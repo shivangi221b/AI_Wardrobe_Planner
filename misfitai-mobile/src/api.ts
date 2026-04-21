@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { dayLabels, dayOrder, eventTypeLabels } from './constants';
 import type {
+  AvatarConfig,
   BodyMeasurements,
   CalendarEvent,
   DayOfWeek,
@@ -11,6 +12,8 @@ import type {
   GarmentFormality,
   GarmentGender,
   GarmentSeasonality,
+  UserProfile,
+  UserProfileUpdate,
 } from './types';
 
 const DEFAULT_API_BASE_URL =
@@ -1052,6 +1055,118 @@ export async function saveMeasurements(
     }
   );
   return mapMeasurements(response);
+}
+
+// ---------------------------------------------------------------------------
+// User profile (style preferences, sizes, avatar)
+// ---------------------------------------------------------------------------
+
+interface ProfileApiResponse {
+  user_id: string;
+  gender?: string | null;
+  birthday?: string | null;
+  skin_tone?: string | null;
+  color_tone?: string | null;
+  favorite_colors?: string[];
+  avoided_colors?: string[];
+  shoe_size?: string | null;
+  top_size?: string | null;
+  bottom_size?: string | null;
+  avatar_config?: {
+    hair_style?: string | null;
+    hair_color?: string | null;
+    body_type?: string | null;
+    skin_tone?: string | null;
+  } | null;
+  updated_at?: string;
+}
+
+function mapUserProfile(r: ProfileApiResponse): UserProfile {
+  return {
+    userId: r.user_id,
+    gender: (r.gender as UserProfile['gender']) ?? null,
+    birthday: r.birthday ?? null,
+    skinTone: (r.skin_tone as UserProfile['skinTone']) ?? null,
+    colorTone: (r.color_tone as UserProfile['colorTone']) ?? null,
+    favoriteColors: r.favorite_colors ?? [],
+    avoidedColors: r.avoided_colors ?? [],
+    shoeSize: r.shoe_size ?? null,
+    topSize: r.top_size ?? null,
+    bottomSize: r.bottom_size ?? null,
+    avatarConfig: r.avatar_config
+      ? {
+          hairStyle: r.avatar_config.hair_style ?? null,
+          hairColor: r.avatar_config.hair_color ?? null,
+          bodyType: r.avatar_config.body_type ?? null,
+          skinTone: r.avatar_config.skin_tone ?? null,
+        }
+      : null,
+    updatedAt: r.updated_at,
+  };
+}
+
+/** Fetch extended style profile for *userId*. Returns ``null`` when not yet created. */
+export async function getUserProfile(userId: string): Promise<UserProfile | null> {
+  if (USE_MOCK_API) return null;
+  try {
+    const response = await requestJson<ProfileApiResponse | null>(
+      `/users/${encodeURIComponent(userId)}/profile`
+    );
+    return response ? mapUserProfile(response) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function profileUpdateToApiPayload(data: UserProfileUpdate): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  if (data.gender !== undefined) payload.gender = data.gender;
+  if (data.birthday !== undefined) payload.birthday = data.birthday;
+  if (data.skinTone !== undefined) payload.skin_tone = data.skinTone;
+  if (data.colorTone !== undefined) payload.color_tone = data.colorTone;
+  if (data.favoriteColors !== undefined) payload.favorite_colors = data.favoriteColors;
+  if (data.avoidedColors !== undefined) payload.avoided_colors = data.avoidedColors;
+  if (data.shoeSize !== undefined) payload.shoe_size = data.shoeSize;
+  if (data.topSize !== undefined) payload.top_size = data.topSize;
+  if (data.bottomSize !== undefined) payload.bottom_size = data.bottomSize;
+  if (data.avatarConfig !== undefined) {
+    if (data.avatarConfig === null) {
+      // Explicit null: tell the server to clear the stored avatar config.
+      payload.avatar_config = null;
+    } else {
+      const av: AvatarConfig = data.avatarConfig;
+      payload.avatar_config = {
+        hair_style: av.hairStyle ?? null,
+        hair_color: av.hairColor ?? null,
+        body_type: av.bodyType ?? null,
+        skin_tone: av.skinTone ?? null,
+      };
+    }
+  }
+  return payload;
+}
+
+/** Create or partially update the style profile for *userId*. */
+export async function updateUserProfile(
+  userId: string,
+  data: UserProfileUpdate
+): Promise<UserProfile> {
+  if (USE_MOCK_API) {
+    return {
+      userId,
+      favoriteColors: data.favoriteColors ?? [],
+      avoidedColors: data.avoidedColors ?? [],
+      ...data,
+    };
+  }
+  const response = await requestJson<ProfileApiResponse>(
+    `/users/${encodeURIComponent(userId)}/profile`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(profileUpdateToApiPayload(data)),
+    }
+  );
+  return mapUserProfile(response);
 }
 
 // ---------------------------------------------------------------------------

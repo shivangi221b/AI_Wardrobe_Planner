@@ -142,6 +142,72 @@ class MediaIngestionJob(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# User profile (style preferences, sizes, avatar)
+# ---------------------------------------------------------------------------
+
+
+class AvatarConfig(BaseModel):
+    """Bitmoji-style avatar configuration stored as a structured JSON object."""
+
+    hair_style: Optional[str] = None
+    """E.g. ``"short_wavy"``, ``"long_straight"``, ``"curly_afro"``."""
+
+    hair_color: Optional[str] = None
+    """E.g. ``"black"``, ``"blonde"``, ``"auburn"``."""
+
+    body_type: Optional[str] = None
+    """One of ``"slim"``, ``"average"``, ``"broad"``."""
+
+    skin_tone: Optional[str] = None
+    """One of ``"very_light"``, ``"light"``, ``"medium_light"``, ``"medium"``,
+    ``"medium_dark"``, ``"dark"``."""
+
+
+class UserProfile(BaseModel):
+    """
+    Extended style profile for a user.
+
+    Measurements (height, chest, etc.) live in :class:`BodyMeasurements`.
+    Auth identity lives in ``app_users``.
+    This model captures the subjective style data that powers personalised
+    colour/size filtering in the recommendation engine and the avatar feature.
+    """
+
+    user_id: str
+
+    # --- Personal ---
+    gender: Optional[str] = None
+    """``"male"``, ``"female"``, or ``"other"``."""
+    birthday: Optional[str] = None
+    """ISO date string ``YYYY-MM-DD``."""
+
+    # --- Appearance ---
+    skin_tone: Optional[str] = None
+    """One of ``"very_light"``, ``"light"``, ``"medium_light"``, ``"medium"``,
+    ``"medium_dark"``, ``"dark"``."""
+
+    color_tone: Optional[str] = None
+    """Broad colour temperature: ``"warm"``, ``"cool"``, or ``"neutral"``."""
+
+    # --- Colour preferences ---
+    favorite_colors: List[str] = []
+    """Colour names / hex codes the user wants prioritised in recommendations."""
+
+    avoided_colors: List[str] = []
+    """Colour names / hex codes the user wants de-prioritised or excluded."""
+
+    # --- Sizes ---
+    shoe_size: Optional[str] = None
+    top_size: Optional[str] = None
+    bottom_size: Optional[str] = None
+
+    # --- Avatar ---
+    avatar_config: Optional[AvatarConfig] = None
+
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # Body measurements
 # ---------------------------------------------------------------------------
 

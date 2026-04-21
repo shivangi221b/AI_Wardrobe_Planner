@@ -11,12 +11,14 @@ import bcrypt
 from supabase import Client, create_client
 
 from .models import (
+    AvatarConfig,
     BodyMeasurements,
     GarmentCategory,
     GarmentFormality,
     GarmentGender,
     GarmentItem,
     GarmentSeasonality,
+    UserProfile,
     build_garment_tags,
 )
 
@@ -30,6 +32,7 @@ def _password_within_bcrypt_limit(password_plain: str) -> bool:
 
 _local_wardrobes: dict[str, List[GarmentItem]] = {}
 _local_measurements: dict[str, BodyMeasurements] = {}
+_local_user_profiles: dict[str, UserProfile] = {}
 # OAuth logins (no Supabase Auth): POST /analytics/register fills this in local dev.
 _local_signup_user_ids: set[str] = set()
 # Email/password users when Supabase is unavailable or table writes fall back (see create_password_user).
@@ -69,6 +72,10 @@ def _table_name() -> str:
 
 def _measurements_table_name() -> str:
     return os.getenv("SUPABASE_MEASUREMENTS_TABLE", "user_measurements")
+
+
+def _profiles_table_name() -> str:
+    return os.getenv("SUPABASE_PROFILES_TABLE", "user_profiles")
 
 
 def _signup_registry_table() -> str:
@@ -691,3 +698,106 @@ def _row_to_measurements(row: dict[str, Any]) -> BodyMeasurements:
         inseam_cm=_float_or_none("inseam_cm"),
         updated_at=_parse_datetime(row.get("updated_at")),
     )
+
+
+# ---------------------------------------------------------------------------
+# User profile (style preferences, sizes, avatar)
+# ---------------------------------------------------------------------------
+
+
+def _row_to_user_profile(row: dict[str, Any]) -> UserProfile:
+    """Deserialise a Supabase ``user_profiles`` row into a :class:`UserProfile`."""
+    avatar_raw = row.get("avatar_config")
+    avatar: Optional[AvatarConfig] = None
+    if isinstance(avatar_raw, dict):
+        avatar = AvatarConfig(
+            hair_style=avatar_raw.get("hair_style"),
+            hair_color=avatar_raw.get("hair_color"),
+            body_type=avatar_raw.get("body_type"),
+            skin_tone=avatar_raw.get("skin_tone"),
+        )
+
+    def _str_list(key: str) -> list[str]:
+        v = row.get(key)
+        if isinstance(v, list):
+            return [str(x) for x in v]
+        return []
+
+    return UserProfile(
+        user_id=str(row.get("user_id", "")),
+        gender=row.get("gender"),
+        birthday=row.get("birthday"),
+        skin_tone=row.get("skin_tone"),
+        color_tone=row.get("color_tone"),
+        favorite_colors=_str_list("favorite_colors"),
+        avoided_colors=_str_list("avoided_colors"),
+        shoe_size=row.get("shoe_size"),
+        top_size=row.get("top_size"),
+        bottom_size=row.get("bottom_size"),
+        avatar_config=avatar,
+        updated_at=_parse_datetime(row.get("updated_at")),
+    )
+
+
+def get_user_profile(user_id: str) -> Optional[UserProfile]:
+    """Return the style profile for *user_id*, or ``None`` if not yet created."""
+    if _use_local_store():
+        return _local_user_profiles.get(user_id)
+    try:
+        result = (
+            get_supabase_client()
+            .table(_profiles_table_name())
+            .select("*")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            return None
+        return _row_to_user_profile(rows[0])
+    except Exception:
+        logger.exception("get_user_profile failed user_id=%s", user_id)
+        return None
+
+
+def upsert_user_profile(user_id: str, data: dict[str, Any]) -> UserProfile:
+    """
+    Create or update the style profile for *user_id*.
+
+    *data* may be a partial dict — only provided keys are written.  The
+    ``user_id`` and ``updated_at`` fields are always set automatically.
+    """
+    now = datetime.utcnow()
+    payload: dict[str, Any] = {k: v for k, v in data.items() if k not in ("user_id", "updated_at")}
+    payload["user_id"] = user_id
+    payload["updated_at"] = now.isoformat()
+
+    # Serialise avatar_config to a plain dict for Supabase jsonb.
+    if "avatar_config" in payload and isinstance(payload["avatar_config"], AvatarConfig):
+        payload["avatar_config"] = payload["avatar_config"].model_dump(mode="json", exclude_none=True)
+
+    if _use_local_store():
+        existing = _local_user_profiles.get(user_id)
+        if existing:
+            merged = existing.model_dump()
+            merged.update(payload)
+            profile = _row_to_user_profile(merged)
+        else:
+            profile = _row_to_user_profile(payload)
+        _local_user_profiles[user_id] = profile
+        return profile
+
+    try:
+        result = (
+            get_supabase_client()
+            .table(_profiles_table_name())
+            .upsert(payload, on_conflict="user_id")
+            .execute()
+        )
+        row = (result.data or [payload])[0]
+        return _row_to_user_profile(row)
+    except Exception:
+        logger.exception("upsert_user_profile failed user_id=%s", user_id)
+        # Return a best-effort object so callers don't crash.
+        return _row_to_user_profile(payload)

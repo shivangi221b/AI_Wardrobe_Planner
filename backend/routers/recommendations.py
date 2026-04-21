@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from ..db import get_measurements, increment_recommendation_counts
+from ..db import get_measurements, get_user_profile, increment_recommendation_counts
 from ..models import (
     DayOutfitSuggestion,
     WeekRecommendationRequest,
@@ -72,6 +72,9 @@ async def recommend_week(
     # Load optional body measurements for soft size-band scoring.
     measurements = get_measurements(request.user_id)
 
+    # Load optional extended profile for colour preference scoring.
+    user_profile = get_user_profile(request.user_id)
+
     # Future: fetch weather per event and pass WeatherContext into the engine.
     # for event in request.events:
     #     if event.location and event.datetime:
@@ -85,6 +88,7 @@ async def recommend_week(
         request.events,
         user_gender=request.user_gender,
         measurements=measurements,
+        user_profile=user_profile,
     )
 
     # Increment usage counters for recommended garments (best-effort).

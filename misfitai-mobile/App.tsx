@@ -6,10 +6,11 @@ import { AppStateProvider, useAppState } from './src/AppStateContext';
 import { WardrobeScreen } from './src/WardrobeScreen';
 import { EventsScreen } from './src/EventsScreen';
 import { WeeklyPlanScreen } from './src/WeeklyPlanScreen';
-import { registerSignupWithBackend, USE_MOCK_API } from './src/api';
+import { ProfileScreen } from './src/ProfileScreen';
+import { registerSignupWithBackend, updateUserProfile, USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
-import { ProfileSetupScreen } from './src/ProfileSetupScreen';
+import { ProfileSetupScreen, type ProfileSetupResult } from './src/ProfileSetupScreen';
 import { palette, radius, type } from './src/theme';
 import { initAnalytics, trackAuthSuccess } from './src/analytics';
 
@@ -38,7 +39,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 
 const SESSION_STORAGE_KEY = '@misfitai/session';
 
-type Tab = 'wardrobe' | 'events' | 'plan';
+type Tab = 'wardrobe' | 'events' | 'plan' | 'profile';
 
 type Session = {
   provider: AuthProvider;
@@ -81,7 +82,8 @@ function ProfileSetupScreenWithMeasurements({
   return (
     <ProfileSetupScreen
       initialProfile={session.profile}
-      onDone={(profilePatch, measurements) => {
+      onDone={(result: ProfileSetupResult) => {
+        const { profilePatch, measurements, profileUpdate } = result;
         const next: Session = {
           ...session,
           profile: { ...(session.profile ?? {}), ...profilePatch },
@@ -95,6 +97,10 @@ function ProfileSetupScreenWithMeasurements({
             /* non-blocking */
           });
         }
+        // Save extended profile data (color preferences, sizes, avatar) non-blocking.
+        updateUserProfile(next.userId, profileUpdate).catch(() => {
+          /* non-blocking */
+        });
       }}
     />
   );
@@ -133,6 +139,10 @@ function AppContent({
 
   const handleTabChange = (nextTab: Tab) => {
     setTab(nextTab);
+    if (nextTab === 'profile') {
+      setTabHint(null);
+      return;
+    }
     if (nextTab === 'events' && !wardrobeStepComplete) {
       setTabHint('Wardrobe is complete after at least one top and one bottom.');
       return;
@@ -153,7 +163,7 @@ function AppContent({
       <StatusBar style="dark" />
       <AtmosphereBackground />
 
-      <View style={styles.topChrome}>
+      <View style={[styles.topChrome, tab === 'profile' && styles.topChromeCompact]}>
         <View style={styles.metaBar}>
           <View style={styles.metaChip}>
             <Text style={styles.metaChipText}>
@@ -167,7 +177,7 @@ function AppContent({
           </Pressable>
         </View>
 
-        <View style={styles.stepperCard}>
+        {tab !== 'profile' ? <View style={styles.stepperCard}>
           {flowSteps.map((item, index) => {
             const active = tab === item.key;
             return (
@@ -196,9 +206,9 @@ function AppContent({
               </React.Fragment>
             );
           })}
-        </View>
+        </View> : null}
 
-        <View style={styles.breadcrumbRow}>
+        {tab !== 'profile' ? <View style={styles.breadcrumbRow}>
           {flowSteps.map((item, index) => {
             const active = tab === item.key;
             return (
@@ -218,9 +228,9 @@ function AppContent({
               </React.Fragment>
             );
           })}
-        </View>
+        </View> : null}
 
-        {tabHint ? <Text style={styles.stepHint}>{tabHint}</Text> : null}
+        {tab !== 'profile' && tabHint ? <Text style={styles.stepHint}>{tabHint}</Text> : null}
       </View>
 
       <View style={styles.content}>
@@ -254,6 +264,13 @@ function AppContent({
             onNavigateToWardrobe={() => handleTabChange('wardrobe')}
           />
         ) : null}
+
+        {tab === 'profile' ? (
+          <ProfileScreen
+            userId={session.userId}
+            displayName={session.profile?.displayName}
+          />
+        ) : null}
       </View>
 
       <View style={styles.navBar}>
@@ -261,6 +278,7 @@ function AppContent({
           { key: 'wardrobe', label: 'Wardrobe' },
           { key: 'events', label: 'Calendar' },
           { key: 'plan', label: 'Outfits' },
+          { key: 'profile', label: 'Profile' },
         ] as const).map((item) => {
           const active = tab === item.key;
           return (
@@ -396,6 +414,9 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 14,
     gap: 8,
+  },
+  topChromeCompact: {
+    gap: 0,
   },
   content: {
     flex: 1,

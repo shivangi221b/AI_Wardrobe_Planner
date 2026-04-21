@@ -2,6 +2,7 @@ import {
   ApiError,
   isApiError,
   getApiErrorMessage,
+  profileUpdateToApiPayload,
   API_BASE_URL,
 } from '../api';
 
@@ -149,5 +150,92 @@ describe('searchGarmentImages (mock mode)', () => {
     const { searchGarmentImages } = require('../api');
     const results = await searchGarmentImages('test-user', '');
     expect(results).toEqual([]);
+  });
+});
+
+// ------------------------------------------------------------------
+// getUserProfile (mock mode)
+// ------------------------------------------------------------------
+
+describe('getUserProfile (mock mode)', () => {
+  it('returns null for an unknown user id', async () => {
+    const { getUserProfile } = require('../api');
+    const result = await getUserProfile('unknown-user');
+    // Mock mode has no stored data — should return null.
+    expect(result).toBeNull();
+  });
+});
+
+// ------------------------------------------------------------------
+// updateUserProfile (mock mode)
+// ------------------------------------------------------------------
+
+describe('updateUserProfile (mock mode)', () => {
+  it('returns a UserProfile shaped object', async () => {
+    const { updateUserProfile } = require('../api');
+    const result = await updateUserProfile('test-user', { gender: 'female' });
+    expect(result).toHaveProperty('userId');
+    expect(result).toHaveProperty('favoriteColors');
+    expect(Array.isArray(result.favoriteColors)).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------------
+// profileUpdateToApiPayload — camelCase → snake_case mapping
+// ------------------------------------------------------------------
+
+describe('profileUpdateToApiPayload', () => {
+  it('maps camelCase to snake_case', () => {
+    const payload = profileUpdateToApiPayload({
+      skinTone: 'medium',
+      colorTone: 'warm',
+      favoriteColors: ['blue'],
+      avoidedColors: ['red'],
+      shoeSize: '42',
+      topSize: 'M',
+      bottomSize: 'L',
+    });
+    expect(payload.skin_tone).toBe('medium');
+    expect(payload.color_tone).toBe('warm');
+    expect(payload.favorite_colors).toEqual(['blue']);
+    expect(payload.avoided_colors).toEqual(['red']);
+    expect(payload.shoe_size).toBe('42');
+    expect(payload.top_size).toBe('M');
+    expect(payload.bottom_size).toBe('L');
+  });
+
+  it('omits keys not provided', () => {
+    const payload = profileUpdateToApiPayload({ gender: 'male' });
+    expect(payload.gender).toBe('male');
+    expect('skin_tone' in payload).toBe(false);
+    expect('avatar_config' in payload).toBe(false);
+  });
+
+  it('serialises avatarConfig object to snake_case keys', () => {
+    const payload = profileUpdateToApiPayload({
+      avatarConfig: {
+        hairStyle: 'long_straight',
+        hairColor: 'black',
+        bodyType: 'slim',
+        skinTone: 'medium_dark',
+      },
+    });
+    const cfg = payload.avatar_config as Record<string, unknown>;
+    expect(cfg).not.toBeNull();
+    expect(cfg.hair_style).toBe('long_straight');
+    expect(cfg.hair_color).toBe('black');
+    expect(cfg.body_type).toBe('slim');
+    expect(cfg.skin_tone).toBe('medium_dark');
+  });
+
+  it('sends avatar_config: null when avatarConfig is explicitly null', () => {
+    const payload = profileUpdateToApiPayload({ avatarConfig: null });
+    expect('avatar_config' in payload).toBe(true);
+    expect(payload.avatar_config).toBeNull();
+  });
+
+  it('does not include avatar_config when avatarConfig is undefined', () => {
+    const payload = profileUpdateToApiPayload({ gender: 'other' });
+    expect('avatar_config' in payload).toBe(false);
   });
 });
