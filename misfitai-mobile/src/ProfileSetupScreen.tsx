@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Alert,
+  Image,
   Platform,
   Pressable,
   SafeAreaView,
@@ -9,6 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { palette, radius, type } from './theme';
 import type { UserProfile as AuthUserProfile } from './AuthScreen';
@@ -247,18 +250,20 @@ interface Step1State {
 function Step1({
   state,
   onChange,
+  forceTouched = false,
 }: {
   state: Step1State;
   onChange: (patch: Partial<Step1State>) => void;
+  forceTouched?: boolean;
 }) {
   const [birthdayTouched, setBirthdayTouched] = useState(false);
   const [showMeasurements, setShowMeasurements] = useState(false);
 
   const birthdayError = useMemo(() => {
     const v = state.birthday.trim();
-    if (!birthdayTouched || !v) return null;
+    if (!(birthdayTouched || forceTouched) || !v) return null;
     return isValidBirthday(v) ? null : 'Use YYYY-MM-DD (e.g., 2001-04-07).';
-  }, [state.birthday, birthdayTouched]);
+  }, [state.birthday, birthdayTouched, forceTouched]);
 
   return (
     <>
@@ -438,6 +443,7 @@ interface Step3State {
   hairStyle: string | null;
   hairColor: string | null;
   bodyType: string | null;
+  selfieUri: string | null;
 }
 
 function Step3({
@@ -447,6 +453,44 @@ function Step3({
   state: Step3State;
   onChange: (patch: Partial<Step3State>) => void;
 }) {
+  async function handlePickSelfie(fromCamera: boolean) {
+    if (fromCamera) {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Camera permission required', 'Please allow camera access in Settings.');
+        return;
+      }
+    }
+    const result = fromCamera
+      ? await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.8,
+        })
+      : await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.8,
+        });
+    if (!result.canceled && result.assets?.[0]?.uri) {
+      onChange({ selfieUri: result.assets[0].uri });
+    }
+  }
+
+  function promptSource() {
+    Alert.alert(
+      'Add a selfie',
+      'Used to generate your personalised avatar',
+      [
+        { text: 'Take selfie', onPress: () => void handlePickSelfie(true) },
+        { text: 'Choose from library', onPress: () => void handlePickSelfie(false) },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }
+
   return (
     <>
       <View style={styles.card}>
@@ -497,9 +541,66 @@ function Step3({
           onSelect={(v) => onChange({ bodyType: v })}
         />
       </View>
+
+      {/* Optional selfie for avatar generation */}
+      <View style={styles.card}>
+        <SectionLabel>Selfie for Avatar Generation</SectionLabel>
+        <Text style={styles.measurementsHint}>
+          Optional — snap a selfie and we'll use it (plus the details above) to generate a
+          personalised illustrated avatar. Your selfie is never stored.
+        </Text>
+        {state.selfieUri ? (
+          <Image
+            source={{ uri: state.selfieUri }}
+            style={selfieStyles.preview}
+            resizeMode="cover"
+          />
+        ) : null}
+        <Pressable onPress={promptSource} style={selfieStyles.btn}>
+          <Text style={selfieStyles.btnText}>
+            {state.selfieUri ? '📷 Retake / Change selfie' : '📷 Take or choose selfie'}
+          </Text>
+        </Pressable>
+        {state.selfieUri ? (
+          <Pressable onPress={() => onChange({ selfieUri: null })} style={selfieStyles.removeBtn}>
+            <Text style={selfieStyles.removeBtnText}>Remove</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </>
   );
 }
+
+const selfieStyles = StyleSheet.create({
+  preview: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: radius.md,
+    backgroundColor: palette.bgAlt,
+    marginBottom: 10,
+  },
+  btn: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.accent,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  btnText: {
+    fontSize: 13,
+    color: palette.accent,
+    fontFamily: type.bodyDemi,
+  },
+  removeBtn: {
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  removeBtnText: {
+    fontSize: 12,
+    color: palette.error,
+    fontFamily: type.body,
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Main wizard component
@@ -523,6 +624,8 @@ export interface ProfileSetupResult {
   profilePatch: Pick<AuthUserProfile, 'gender' | 'birthday'>;
   measurements: MeasurementFields;
   profileUpdate: UserProfileUpdate;
+  /** Local file URI of the selfie, if the user provided one. Used to trigger avatar generation. */
+  selfieUri: string | null;
 }
 
 export function ProfileSetupScreen({
@@ -559,7 +662,12 @@ export function ProfileSetupScreen({
     hairStyle: null,
     hairColor: null,
     bodyType: null,
+    selfieUri: null,
   });
+
+  // Controlled "force-show errors" flag for Step 1's birthday field.
+  // Set to true when the user attempts to advance with an invalid date.
+  const [forceStep1Touched, setForceStep1Touched] = useState(false);
 
   function buildResult(skipped = false): ProfileSetupResult {
     const measurements: MeasurementFields = skipped
@@ -603,10 +711,20 @@ export function ProfileSetupScreen({
       },
       measurements,
       profileUpdate,
+      selfieUri: skipped ? null : (step3.selfieUri ?? null),
     };
   }
 
   function handleNext() {
+    // Guard: block advancement from Step 1 if the birthday field has a value
+    // but it fails validation.  Force the error UI to show.
+    if (step === 0) {
+      const bd = step1.birthday.trim();
+      if (bd && !isValidBirthday(bd)) {
+        setForceStep1Touched(true);
+        return;
+      }
+    }
     if (step < TOTAL_STEPS - 1) {
       setStep((s) => s + 1);
     } else {
@@ -636,6 +754,7 @@ export function ProfileSetupScreen({
           <Step1
             state={step1}
             onChange={(patch) => setStep1((s) => ({ ...s, ...patch }))}
+            forceTouched={forceStep1Touched}
           />
         )}
         {step === 1 && (

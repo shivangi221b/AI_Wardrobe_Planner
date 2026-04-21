@@ -207,6 +207,48 @@ def _color_words(color_str: Optional[str]) -> frozenset[str]:
     return frozenset(re.split(r"[\s,/\-_]+", color_str.strip().lower()))
 
 
+class _ColorPrefCtx:
+    """
+    Pre-computed colour preference data for a single ``_pick_garment`` call.
+
+    Building ``avoid_words`` / ``fav_words`` once per call (rather than once
+    per garment comparison) eliminates the O(n × |preferences|) rebuild cost
+    that would otherwise occur for larger wardrobes.
+    """
+
+    __slots__ = ("avoid_words", "fav_words", "tone")
+
+    def __init__(self, profile: Optional[UserProfile]) -> None:
+        if profile is None:
+            self.avoid_words: frozenset[str] = frozenset()
+            self.fav_words: frozenset[str] = frozenset()
+            self.tone: Optional[str] = None
+        else:
+            self.avoid_words = frozenset(
+                w for c in (profile.avoided_colors or []) for w in _color_words(c)
+            )
+            self.fav_words = frozenset(
+                w for c in (profile.favorite_colors or []) for w in _color_words(c)
+            )
+            self.tone = profile.color_tone.lower() if profile.color_tone else None
+
+    def score(self, item: GarmentItem) -> float:
+        """Return the colour preference score for *item* using precomputed token sets."""
+        item_words = _color_words(item.color_primary) | _color_words(item.color_secondary)
+        if not item_words:
+            return 0.0
+        sc = 0.0
+        if self.avoid_words and item_words & self.avoid_words:
+            sc += _COLOR_AVOID_PENALTY
+        if self.fav_words and item_words & self.fav_words:
+            sc += _COLOR_MATCH_BONUS
+        if self.tone == "warm" and item_words & _WARM_COLOR_FAMILIES:
+            sc += _COLOR_TONE_BONUS
+        elif self.tone == "cool" and item_words & _COOL_COLOR_FAMILIES:
+            sc += _COLOR_TONE_BONUS
+        return sc
+
+
 def _score_color_preference(item: GarmentItem, profile: Optional[UserProfile]) -> float:
     """
     Return a floating-point colour score for *item* given *profile*.
@@ -215,44 +257,12 @@ def _score_color_preference(item: GarmentItem, profile: Optional[UserProfile]) -
     indicate colours the user explicitly wants to avoid.  Returns 0.0 when
     no profile is provided or preferences are empty.
 
-    The score is additive and relative — it does not replace formality or
-    size scoring, but is factored in when selecting among otherwise-equal
-    candidates.
+    .. note::
+        This public helper re-creates token sets on every call.  Inside
+        ``_pick_garment`` use :class:`_ColorPrefCtx` instead so token sets
+        are computed only once per request.
     """
-    if profile is None:
-        return 0.0
-
-    item_words = _color_words(item.color_primary) | _color_words(item.color_secondary)
-    if not item_words:
-        return 0.0
-
-    score = 0.0
-
-    # Hard penalty for avoided colours — any word overlap triggers it.
-    if profile.avoided_colors:
-        avoid_words = frozenset(
-            w for c in profile.avoided_colors for w in _color_words(c)
-        )
-        if item_words & avoid_words:
-            score += _COLOR_AVOID_PENALTY
-
-    # Bonus for explicitly preferred colours.
-    if profile.favorite_colors:
-        fav_words = frozenset(
-            w for c in profile.favorite_colors for w in _color_words(c)
-        )
-        if item_words & fav_words:
-            score += _COLOR_MATCH_BONUS
-
-    # Soft bonus / mild penalty for colour tone alignment.
-    if profile.color_tone:
-        tone = profile.color_tone.lower()
-        if tone == "warm" and item_words & _WARM_COLOR_FAMILIES:
-            score += _COLOR_TONE_BONUS
-        elif tone == "cool" and item_words & _COOL_COLOR_FAMILIES:
-            score += _COLOR_TONE_BONUS
-
-    return score
+    return _ColorPrefCtx(profile).score(item)
 
 
 # ---------------------------------------------------------------------------
@@ -320,21 +330,20 @@ def _pick_garment(
 
     Selection priority (per formality tier, in chain order):
       For each tier:
-        1. Unused, size-matched, colour-scored, event-appropriate
-        2. Unused, event-appropriate (no size match required)
-        3. Already-used, size-matched, colour-scored, event-appropriate
-        4. Already-used, event-appropriate
+        1. Unused, size-matched, not-avoided, event-appropriate   ← best
+        2. Unused, size-matched, any colour                       ← size always beats colour
+        3. Unused, not-avoided (no size match)
+        4. Unused, any colour (last unused resort)
+        5. Same four levels repeated for already-used items
       After exhausting all explicit tiers:
-        5. Garments with formality=None (untagged) — treated as last resort
-           so existing vision-ingested items without a formality value are
-           never silently dropped.
+        6. Garments with formality=None (untagged) — treated as last resort.
       Final fallback:
-        6. None — no appropriate garment found
+        7. None — no appropriate garment found
 
-    Colour scoring (via :func:`_score_color_preference`) applies a penalty for
-    avoided colours and a bonus for favourite colours or matching colour tone.
-    Items with a negative colour score are deprioritised relative to
-    colour-neutral or colour-positive items within the same tier.
+    Colour scoring is computed once per call via :class:`_ColorPrefCtx` to
+    avoid rebuilding token sets for every garment comparison.  Size matching
+    always takes priority over colour avoidance — a correctly-sized
+    avoided-colour item is preferred over a not-avoided item that doesn't fit.
     """
     candidates = [
         g for g in pool
@@ -343,34 +352,52 @@ def _pick_garment(
     if not candidates:
         return None
 
-    # Primary sort: times_recommended ascending (variety); tiebreak: colour score descending.
-    candidates.sort(
-        key=lambda g: (g.times_recommended, -_score_color_preference(g, user_profile))
-    )
+    # Build colour preference context once for this call.
+    ctx = _ColorPrefCtx(user_profile)
+
+    # Cache per-garment scores so the lambda in sort() and _best() each only
+    # compute the score once.
+    color_scores: dict[str, float] = {g.id: ctx.score(g) for g in candidates}
+
+    # Primary sort: variety (times_recommended asc); tiebreak: colour score desc.
+    candidates.sort(key=lambda g: (g.times_recommended, -color_scores[g.id]))
 
     def formality_matches(g: GarmentItem, tier: frozenset[str]) -> bool:
         return g.formality is not None and g.formality.value in tier
 
+    def _best(items: list[GarmentItem]) -> Optional[GarmentItem]:
+        """
+        Return the best item from *items* respecting the size-first,
+        colour-second priority order.
+        """
+        if not items:
+            return None
+
+        if user_size_label:
+            # 1st priority: size-matched AND not-avoided
+            sized_clean = [
+                g for g in items
+                if _size_matches(g, user_size_label) and color_scores[g.id] >= 0
+            ]
+            if sized_clean:
+                return sized_clean[0]
+            # 2nd priority: size-matched (even if avoided colour)
+            sized_any = [g for g in items if _size_matches(g, user_size_label)]
+            if sized_any:
+                return sized_any[0]
+
+        # No size preference or no size-matched item: prefer not-avoided colour.
+        not_avoided = [g for g in items if color_scores[g.id] >= 0]
+        if not_avoided:
+            return not_avoided[0]
+        return items[0]
+
     def _pick_from(subset: list[GarmentItem]) -> Optional[GarmentItem]:
-        """Return the best item from *subset* applying size and colour preference."""
+        """Split *subset* into unused / in-use and pick from each in order."""
         if not subset:
             return None
         unused = [g for g in subset if g.id not in used_ids]
         in_use = [g for g in subset if g.id in used_ids]
-
-        # Within unused: prefer items with a non-negative colour score.
-        def _best(items: list[GarmentItem]) -> Optional[GarmentItem]:
-            if not items:
-                return None
-            # Filter out strongly-avoided items if alternatives exist.
-            not_avoided = [g for g in items if _score_color_preference(g, user_profile) >= 0]
-            pool = not_avoided if not_avoided else items
-            if user_size_label:
-                sized = [g for g in pool if _size_matches(g, user_size_label)]
-                if sized:
-                    return sized[0]
-            return pool[0]
-
         result = _best(unused)
         if result is not None:
             return result
@@ -383,8 +410,8 @@ def _pick_garment(
             return result
 
     # Fallback: items whose formality was never set (e.g. vision-ingested with
-    # no recognized formality label).  These are treated as context-neutral
-    # rather than excluded outright.
+    # no recognized formality label).  Treated as context-neutral rather than
+    # excluded outright.
     untagged = [g for g in candidates if g.formality is None]
     return _pick_from(untagged)
 

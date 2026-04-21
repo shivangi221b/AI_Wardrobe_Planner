@@ -1118,7 +1118,7 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
   }
 }
 
-function profileUpdateToApiPayload(data: UserProfileUpdate): Record<string, unknown> {
+export function profileUpdateToApiPayload(data: UserProfileUpdate): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
   if (data.gender !== undefined) payload.gender = data.gender;
   if (data.birthday !== undefined) payload.birthday = data.birthday;
@@ -1129,14 +1129,20 @@ function profileUpdateToApiPayload(data: UserProfileUpdate): Record<string, unkn
   if (data.shoeSize !== undefined) payload.shoe_size = data.shoeSize;
   if (data.topSize !== undefined) payload.top_size = data.topSize;
   if (data.bottomSize !== undefined) payload.bottom_size = data.bottomSize;
-  if (data.avatarConfig !== undefined && data.avatarConfig !== null) {
-    const av: AvatarConfig = data.avatarConfig;
-    payload.avatar_config = {
-      hair_style: av.hairStyle ?? null,
-      hair_color: av.hairColor ?? null,
-      body_type: av.bodyType ?? null,
-      skin_tone: av.skinTone ?? null,
-    };
+  if (data.avatarConfig !== undefined) {
+    if (data.avatarConfig === null) {
+      // Explicit null: tell the server to clear the stored avatar config.
+      payload.avatar_config = null;
+    } else {
+      const av: AvatarConfig = data.avatarConfig;
+      payload.avatar_config = {
+        hair_style: av.hairStyle ?? null,
+        hair_color: av.hairColor ?? null,
+        body_type: av.bodyType ?? null,
+        skin_tone: av.skinTone ?? null,
+        avatar_image_url: av.avatarImageUrl ?? null,
+      };
+    }
   }
   return payload;
 }

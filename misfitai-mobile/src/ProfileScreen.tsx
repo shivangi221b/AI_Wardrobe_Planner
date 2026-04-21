@@ -254,7 +254,7 @@ function AvatarEditModal({
   onSave: (v: AvatarEditState) => void;
 }) {
   const [draft, setDraft] = useState<AvatarEditState>(initial);
-  useEffect(() => { setDraft(initial); }, [visible]);
+  useEffect(() => { setDraft(initial); }, [visible, initial]);
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -413,6 +413,9 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
       });
       setProfile(updated);
       setPersonalDirty(false);
+    } catch {
+      Alert.alert('Save failed', 'Could not save personal info. Please try again.');
+      // Keep dirty=true so the save bar remains visible.
     } finally {
       setPersonalSaving(false);
     }
@@ -431,6 +434,8 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
       };
       await updateMeasurements(data);
       setBodyDirty(false);
+    } catch {
+      Alert.alert('Save failed', 'Could not save measurements. Please try again.');
     } finally {
       setBodySaving(false);
     }
@@ -447,6 +452,8 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
       });
       setProfile(updated);
       setStyleDirty(false);
+    } catch {
+      Alert.alert('Save failed', 'Could not save style preferences. Please try again.');
     } finally {
       setStyleSaving(false);
     }
@@ -462,6 +469,8 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
       });
       setProfile(updated);
       setSizesDirty(false);
+    } catch {
+      Alert.alert('Save failed', 'Could not save sizes. Please try again.');
     } finally {
       setSizesSaving(false);
     }
