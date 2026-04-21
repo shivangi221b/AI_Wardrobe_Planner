@@ -5,7 +5,7 @@ Covers:
 - PUT /users/{user_id}/profile → creates a new profile
 - PUT (partial) → updates without clobbering omitted fields
 - PUT with explicit null → clears a stored field
-- avatar_config round-trip
+- avatar_config round-trip (including avatar_image_url for generated portrait)
 """
 
 from __future__ import annotations
@@ -116,6 +116,14 @@ class TestPutProfile:
         assert cfg["hair_style"] == "long_straight"
         assert cfg["hair_color"] == "black"
         assert cfg["skin_tone"] == "medium_dark"
+
+    async def test_avatar_image_url_persisted(self, client):
+        r = await client.put(
+            "/users/u1/profile",
+            json={"avatar_config": {"avatar_image_url": "https://example.com/avatar.jpg"}},
+        )
+        assert r.status_code == 200
+        assert r.json()["avatar_config"]["avatar_image_url"] == "https://example.com/avatar.jpg"
 
 
 # ---------------------------------------------------------------------------
