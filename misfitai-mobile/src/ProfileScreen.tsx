@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -11,10 +13,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { palette, radius, type } from './theme';
 import { useAppState } from './AppStateContext';
 import {
+  generateAvatar,
   getUserProfile,
   updateUserProfile,
 } from './api';
@@ -368,6 +372,9 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
   // --- Avatar ---
   const [avatar, setAvatar] = useState<AvatarConfig | null>(null);
   const [avatarModalOpen, setAvatarModalOpen] = useState(false);
+  const [avatarImageUrl, setAvatarImageUrl] = useState<string | null>(null);
+  const [avatarGenerating, setAvatarGenerating] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
 
   // --- Load ---
   useEffect(() => {
@@ -386,6 +393,7 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
           setBottomSize(p.bottomSize ?? null);
           setShoeSize(p.shoeSize ?? '');
           setAvatar(p.avatarConfig ?? null);
+          setAvatarImageUrl(p.avatarConfig?.avatarImageUrl ?? null);
         }
       })
       .finally(() => setLoading(false));
@@ -476,6 +484,71 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
       /* non-blocking */
     }
   }, [userId]);
+
+  // --- Selfie capture + avatar generation ---
+
+  const pickSelfie = useCallback(
+    async (fromCamera: boolean) => {
+      // Request permission for camera if needed.
+      if (fromCamera) {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Camera permission required', 'Please allow camera access in Settings.');
+          return;
+        }
+      }
+
+      const result = fromCamera
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.8,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.8,
+          });
+
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+
+      const selfieUri = result.assets[0].uri;
+      setAvatarGenerating(true);
+      setAvatarError(null);
+
+      try {
+        const url = await generateAvatar(userId, selfieUri);
+        setAvatarImageUrl(url);
+        // Merge the new URL into the existing avatar config.
+        const newAvatar: AvatarConfig = {
+          ...(avatar ?? {}),
+          avatarImageUrl: url,
+        };
+        setAvatar(newAvatar);
+        await updateUserProfile(userId, { avatarConfig: newAvatar });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Avatar generation failed.';
+        setAvatarError(msg);
+      } finally {
+        setAvatarGenerating(false);
+      }
+    },
+    [userId, avatar]
+  );
+
+  const promptSelfieSource = useCallback(() => {
+    Alert.alert(
+      'Generate your avatar',
+      'Choose a photo source',
+      [
+        { text: 'Take selfie', onPress: () => void pickSelfie(true) },
+        { text: 'Choose from library', onPress: () => void pickSelfie(false) },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }, [pickSelfie]);
 
   // --- Discard helpers ---
   const discardPersonal = () => {
@@ -671,10 +744,47 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
         {/* ---- Avatar ---- */}
         <SectionHeader title="Avatar" />
         <View style={s.card}>
-          <AvatarPreview avatar={avatar} skinTone={skinTone} />
-          <Pressable onPress={() => setAvatarModalOpen(true)} style={[s.btn, s.btnOutline, { marginTop: 14 }]}>
-            <Text style={[s.btnText, s.btnOutlineText]}>Edit Avatar</Text>
-          </Pressable>
+          {/* Generated portrait (if available) or placeholder */}
+          {avatarImageUrl ? (
+            <Image
+              source={{ uri: avatarImageUrl }}
+              style={s.avatarImage}
+              resizeMode="cover"
+            />
+          ) : (
+            <AvatarPreview avatar={avatar} skinTone={skinTone} />
+          )}
+
+          {/* Generation status / error */}
+          {avatarGenerating ? (
+            <View style={s.avatarGeneratingRow}>
+              <ActivityIndicator color={palette.accent} size="small" />
+              <Text style={s.avatarGeneratingText}>Generating your avatar…</Text>
+            </View>
+          ) : null}
+          {avatarError ? (
+            <Text style={s.avatarErrorText}>{avatarError}</Text>
+          ) : null}
+
+          {/* Action buttons */}
+          <View style={[s.saveBar, { marginTop: 14 }]}>
+            <Pressable
+              onPress={promptSelfieSource}
+              style={[s.btn, s.btnPrimary]}
+              disabled={avatarGenerating}
+            >
+              <Text style={[s.btnText, s.btnPrimaryText]}>
+                {avatarImageUrl ? 'Regenerate from selfie' : 'Generate from selfie'}
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setAvatarModalOpen(true)}
+              style={[s.btn, s.btnGhost]}
+              disabled={avatarGenerating}
+            >
+              <Text style={[s.btnText, s.btnGhostText]}>Edit details</Text>
+            </Pressable>
+          </View>
         </View>
 
         <View style={{ height: 40 }} />
@@ -975,5 +1085,28 @@ const s = StyleSheet.create({
     paddingVertical: 16,
     borderTopWidth: 1,
     borderTopColor: palette.line,
+  },
+  avatarImage: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: radius.lg,
+    backgroundColor: palette.bgAlt,
+  },
+  avatarGeneratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  avatarGeneratingText: {
+    fontSize: 13,
+    color: palette.muted,
+    fontFamily: type.body,
+  },
+  avatarErrorText: {
+    marginTop: 10,
+    fontSize: 12,
+    color: palette.error,
+    fontFamily: type.body,
   },
 });

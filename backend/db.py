@@ -5,6 +5,7 @@ import os
 import re
 from datetime import datetime
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, List, Optional, TypedDict
 
 import bcrypt
@@ -801,3 +802,48 @@ def upsert_user_profile(user_id: str, data: dict[str, Any]) -> UserProfile:
         logger.exception("upsert_user_profile failed user_id=%s", user_id)
         # Return a best-effort object so callers don't crash.
         return _row_to_user_profile(payload)
+
+
+# ---------------------------------------------------------------------------
+# Avatar image storage
+# ---------------------------------------------------------------------------
+
+_LOCAL_AVATARS_DIR = Path(os.getenv("LOCAL_AVATARS_DIR", "outputs/local_avatars"))
+_LOCAL_AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+
+_AVATAR_BUCKET = lambda: (os.getenv("AVATAR_STORAGE_BUCKET") or "avatars").strip()  # noqa: E731
+
+
+def store_avatar_image(user_id: str, image_bytes: bytes) -> str:
+    """
+    Persist a generated avatar JPEG and return its public URL.
+
+    Local mode  → writes to ``outputs/local_avatars/{user_id}.jpg`` and
+                  returns the relative path ``/assets/local-avatars/{user_id}.jpg``
+                  (served by the FastAPI static-files mount added in ``main.py``).
+
+    Supabase mode → uploads to the ``AVATAR_STORAGE_BUCKET`` bucket at path
+                    ``{user_id}/avatar.jpg`` (upsert so re-generation overwrites)
+                    and returns the public URL via ``get_public_url``.
+    """
+    safe_id = re.sub(r"[^A-Za-z0-9_\-]", "_", user_id)[:128]
+
+    if _use_local_store():
+        dest = _LOCAL_AVATARS_DIR / f"{safe_id}.jpg"
+        dest.write_bytes(image_bytes)
+        return f"/assets/local-avatars/{safe_id}.jpg"
+
+    storage_path = f"{safe_id}/avatar.jpg"
+    bucket = _AVATAR_BUCKET()
+    try:
+        client = get_supabase_client()
+        client.storage.from_(bucket).upload(
+            path=storage_path,
+            file=image_bytes,
+            file_options={"content-type": "image/jpeg", "upsert": "true"},
+        )
+        url_resp = client.storage.from_(bucket).get_public_url(storage_path)
+        return str(url_resp)
+    except Exception:
+        logger.exception("store_avatar_image failed user_id=%s", user_id)
+        raise

@@ -35,7 +35,7 @@ from .models import (
     MediaType,
     WeekEvent,
 )
-from .routers import analytics_router, auth_router, recommendations, weather_router, calendar_router, profile_router
+from .routers import analytics_router, auth_router, recommendations, weather_router, calendar_router, profile_router, avatar_router
 from .routers.analytics_router import public_metrics_router
 from .storage import get_wardrobe, get_week_events as _storage_get_week_events, store_week_events
 
@@ -77,6 +77,7 @@ app.include_router(calendar_router.router)
 app.include_router(analytics_router.router)
 app.include_router(public_metrics_router)
 app.include_router(profile_router.router)
+app.include_router(avatar_router.router)
 
 _local_assets_dir = Path(os.getenv("LOCAL_GARMENTS_DIR", "outputs/local_garments"))
 _local_assets_dir.mkdir(parents=True, exist_ok=True)
@@ -84,6 +85,14 @@ app.mount(
     "/assets/local-garments",
     StaticFiles(directory=str(_local_assets_dir)),
     name="local-garments",
+)
+
+_local_avatars_dir = Path(os.getenv("LOCAL_AVATARS_DIR", "outputs/local_avatars"))
+_local_avatars_dir.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/assets/local-avatars",
+    StaticFiles(directory=str(_local_avatars_dir)),
+    name="local-avatars",
 )
 
 

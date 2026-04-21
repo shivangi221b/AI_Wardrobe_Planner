@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Alert,
+  Image,
   Platform,
   Pressable,
   SafeAreaView,
@@ -9,6 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { palette, radius, type } from './theme';
 import type { UserProfile as AuthUserProfile } from './AuthScreen';
@@ -438,6 +441,7 @@ interface Step3State {
   hairStyle: string | null;
   hairColor: string | null;
   bodyType: string | null;
+  selfieUri: string | null;
 }
 
 function Step3({
@@ -447,6 +451,44 @@ function Step3({
   state: Step3State;
   onChange: (patch: Partial<Step3State>) => void;
 }) {
+  async function handlePickSelfie(fromCamera: boolean) {
+    if (fromCamera) {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Camera permission required', 'Please allow camera access in Settings.');
+        return;
+      }
+    }
+    const result = fromCamera
+      ? await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.8,
+        })
+      : await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.8,
+        });
+    if (!result.canceled && result.assets?.[0]?.uri) {
+      onChange({ selfieUri: result.assets[0].uri });
+    }
+  }
+
+  function promptSource() {
+    Alert.alert(
+      'Add a selfie',
+      'Used to generate your personalised avatar',
+      [
+        { text: 'Take selfie', onPress: () => void handlePickSelfie(true) },
+        { text: 'Choose from library', onPress: () => void handlePickSelfie(false) },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }
+
   return (
     <>
       <View style={styles.card}>
@@ -497,9 +539,66 @@ function Step3({
           onSelect={(v) => onChange({ bodyType: v })}
         />
       </View>
+
+      {/* Optional selfie for avatar generation */}
+      <View style={styles.card}>
+        <SectionLabel>Selfie for Avatar Generation</SectionLabel>
+        <Text style={styles.measurementsHint}>
+          Optional — snap a selfie and we'll use it (plus the details above) to generate a
+          personalised illustrated avatar. Your selfie is never stored.
+        </Text>
+        {state.selfieUri ? (
+          <Image
+            source={{ uri: state.selfieUri }}
+            style={selfieStyles.preview}
+            resizeMode="cover"
+          />
+        ) : null}
+        <Pressable onPress={promptSource} style={selfieStyles.btn}>
+          <Text style={selfieStyles.btnText}>
+            {state.selfieUri ? '📷 Retake / Change selfie' : '📷 Take or choose selfie'}
+          </Text>
+        </Pressable>
+        {state.selfieUri ? (
+          <Pressable onPress={() => onChange({ selfieUri: null })} style={selfieStyles.removeBtn}>
+            <Text style={selfieStyles.removeBtnText}>Remove</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </>
   );
 }
+
+const selfieStyles = StyleSheet.create({
+  preview: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: radius.md,
+    backgroundColor: palette.bgAlt,
+    marginBottom: 10,
+  },
+  btn: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.accent,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  btnText: {
+    fontSize: 13,
+    color: palette.accent,
+    fontFamily: type.bodyDemi,
+  },
+  removeBtn: {
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  removeBtnText: {
+    fontSize: 12,
+    color: palette.error,
+    fontFamily: type.body,
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Main wizard component
@@ -523,6 +622,8 @@ export interface ProfileSetupResult {
   profilePatch: Pick<AuthUserProfile, 'gender' | 'birthday'>;
   measurements: MeasurementFields;
   profileUpdate: UserProfileUpdate;
+  /** Local file URI of the selfie, if the user provided one. Used to trigger avatar generation. */
+  selfieUri: string | null;
 }
 
 export function ProfileSetupScreen({
@@ -559,6 +660,7 @@ export function ProfileSetupScreen({
     hairStyle: null,
     hairColor: null,
     bodyType: null,
+    selfieUri: null,
   });
 
   function buildResult(skipped = false): ProfileSetupResult {
@@ -603,6 +705,7 @@ export function ProfileSetupScreen({
       },
       measurements,
       profileUpdate,
+      selfieUri: skipped ? null : (step3.selfieUri ?? null),
     };
   }
 

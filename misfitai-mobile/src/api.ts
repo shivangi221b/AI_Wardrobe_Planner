@@ -1077,6 +1077,7 @@ interface ProfileApiResponse {
     hair_color?: string | null;
     body_type?: string | null;
     skin_tone?: string | null;
+    avatar_image_url?: string | null;
   } | null;
   updated_at?: string;
 }
@@ -1099,6 +1100,7 @@ function mapUserProfile(r: ProfileApiResponse): UserProfile {
           hairColor: r.avatar_config.hair_color ?? null,
           bodyType: r.avatar_config.body_type ?? null,
           skinTone: r.avatar_config.skin_tone ?? null,
+          avatarImageUrl: r.avatar_config.avatar_image_url ?? null,
         }
       : null,
     updatedAt: r.updated_at,
@@ -1136,6 +1138,7 @@ function profileUpdateToApiPayload(data: UserProfileUpdate): Record<string, unkn
       hair_color: av.hairColor ?? null,
       body_type: av.bodyType ?? null,
       skin_tone: av.skinTone ?? null,
+      avatar_image_url: av.avatarImageUrl ?? null,
     };
   }
   return payload;
@@ -1162,6 +1165,58 @@ export async function updateUserProfile(
     }
   );
   return mapUserProfile(response);
+}
+
+// ---------------------------------------------------------------------------
+// Avatar generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload a selfie to generate a stylised 2-D portrait avatar.
+ * The selfie is used only for generation and is NOT stored on the server.
+ *
+ * @param userId   Authenticated user id.
+ * @param selfieUri  Local file:// URI returned by expo-image-picker.
+ * @returns        The public URL of the generated avatar image.
+ */
+export async function generateAvatar(userId: string, selfieUri: string): Promise<string> {
+  if (USE_MOCK_API) {
+    // Return a deterministic placeholder so the UI can render something.
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(userId)}&size=512&background=1b1b19&color=f4f4f2&rounded=true`;
+  }
+
+  const formData = new FormData();
+  // React Native / Expo FormData accepts an object with uri, name, type.
+  formData.append('selfie', {
+    uri: selfieUri,
+    name: 'selfie.jpg',
+    type: 'image/jpeg',
+  } as unknown as Blob);
+
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/avatar/generate`,
+    {
+      method: 'POST',
+      body: formData,
+      // Do NOT set Content-Type manually — fetch sets it with the boundary.
+    }
+  );
+
+  const rawBody = await response.text();
+  if (!response.ok) {
+    throw new ApiError(
+      `Avatar generation failed: ${response.status} ${response.statusText}`,
+      response.status,
+      rawBody
+    );
+  }
+
+  const data = JSON.parse(rawBody) as { avatar_image_url?: string };
+  const url = (data.avatar_image_url || '').trim();
+  if (!url) {
+    throw new ApiError('Invalid avatar response: missing avatar_image_url', 502, rawBody);
+  }
+  return url;
 }
 
 // ---------------------------------------------------------------------------
