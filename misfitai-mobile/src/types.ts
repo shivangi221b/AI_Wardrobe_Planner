@@ -81,3 +81,53 @@ export interface DayRecommendation {
   outfit: Outfit;
   explanation: string;
 }
+
+// ---------------------------------------------------------------------------
+// User profile (style preferences, sizes, avatar)
+// ---------------------------------------------------------------------------
+
+export interface AvatarConfig {
+  hairStyle?: string | null;
+  hairColor?: string | null;
+  bodyType?: string | null;
+  skinTone?: string | null;
+}
+
+export type ColorTone = 'warm' | 'cool' | 'neutral';
+
+export type SkinTone =
+  | 'very_light'
+  | 'light'
+  | 'medium_light'
+  | 'medium'
+  | 'medium_dark'
+  | 'dark';
+
+export interface UserProfile {
+  userId: string;
+  gender?: 'male' | 'female' | 'other' | null;
+  birthday?: string | null;
+  skinTone?: SkinTone | null;
+  colorTone?: ColorTone | null;
+  favoriteColors: string[];
+  avoidedColors: string[];
+  shoeSize?: string | null;
+  topSize?: string | null;
+  bottomSize?: string | null;
+  avatarConfig?: AvatarConfig | null;
+  updatedAt?: string;
+}
+
+/** Partial update payload for PUT /users/{userId}/profile */
+export interface UserProfileUpdate {
+  gender?: 'male' | 'female' | 'other' | null;
+  birthday?: string | null;
+  skinTone?: SkinTone | null;
+  colorTone?: ColorTone | null;
+  favoriteColors?: string[];
+  avoidedColors?: string[];
+  shoeSize?: string | null;
+  topSize?: string | null;
+  bottomSize?: string | null;
+  avatarConfig?: AvatarConfig | null;
+}

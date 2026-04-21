@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .llm import generate_outfit_explanation
-from .models import BodyMeasurements, DayOutfitSuggestion, GarmentItem, WeekEvent
+from .models import BodyMeasurements, DayOutfitSuggestion, GarmentItem, UserProfile, WeekEvent
 
 # ---------------------------------------------------------------------------
 # Category sets — checked against both category.value and sub_category
@@ -171,6 +171,91 @@ def _size_matches(item: GarmentItem, user_size_label: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Colour-preference helpers
+# ---------------------------------------------------------------------------
+
+# Broad colour-family groupings used to map a garment's color_primary/secondary
+# to warm or cool categories.  Kept intentionally loose — the goal is soft
+# preference scoring, not hard exclusion.
+_WARM_COLOR_FAMILIES: frozenset[str] = frozenset(
+    {
+        "red", "orange", "yellow", "gold", "amber", "coral", "rust",
+        "terracotta", "brown", "beige", "tan", "camel", "sand",
+        "cream", "ivory", "olive", "mustard", "peach", "salmon",
+    }
+)
+
+_COOL_COLOR_FAMILIES: frozenset[str] = frozenset(
+    {
+        "blue", "navy", "indigo", "violet", "purple", "lilac", "lavender",
+        "teal", "cyan", "turquoise", "mint", "green", "sage", "emerald",
+        "grey", "gray", "silver", "white", "black",
+    }
+)
+
+# Score modifiers (added to a base score of 0.0)
+_COLOR_MATCH_BONUS = 0.5
+_COLOR_AVOID_PENALTY = -2.0
+_COLOR_TONE_BONUS = 0.2
+
+
+def _color_words(color_str: Optional[str]) -> frozenset[str]:
+    """Tokenise a colour string into normalised words for fuzzy matching."""
+    if not color_str:
+        return frozenset()
+    import re
+    return frozenset(re.split(r"[\s,/\-_]+", color_str.strip().lower()))
+
+
+def _score_color_preference(item: GarmentItem, profile: Optional[UserProfile]) -> float:
+    """
+    Return a floating-point colour score for *item* given *profile*.
+
+    Positive scores indicate colour preference alignment; negative scores
+    indicate colours the user explicitly wants to avoid.  Returns 0.0 when
+    no profile is provided or preferences are empty.
+
+    The score is additive and relative — it does not replace formality or
+    size scoring, but is factored in when selecting among otherwise-equal
+    candidates.
+    """
+    if profile is None:
+        return 0.0
+
+    item_words = _color_words(item.color_primary) | _color_words(item.color_secondary)
+    if not item_words:
+        return 0.0
+
+    score = 0.0
+
+    # Hard penalty for avoided colours — any word overlap triggers it.
+    if profile.avoided_colors:
+        avoid_words = frozenset(
+            w for c in profile.avoided_colors for w in _color_words(c)
+        )
+        if item_words & avoid_words:
+            score += _COLOR_AVOID_PENALTY
+
+    # Bonus for explicitly preferred colours.
+    if profile.favorite_colors:
+        fav_words = frozenset(
+            w for c in profile.favorite_colors for w in _color_words(c)
+        )
+        if item_words & fav_words:
+            score += _COLOR_MATCH_BONUS
+
+    # Soft bonus / mild penalty for colour tone alignment.
+    if profile.color_tone:
+        tone = profile.color_tone.lower()
+        if tone == "warm" and item_words & _WARM_COLOR_FAMILIES:
+            score += _COLOR_TONE_BONUS
+        elif tone == "cool" and item_words & _COOL_COLOR_FAMILIES:
+            score += _COLOR_TONE_BONUS
+
+    return score
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -227,16 +312,17 @@ def _pick_garment(
     used_ids: set[str],
     event_type: str = "",
     user_size_label: Optional[str] = None,
+    user_profile: Optional[UserProfile] = None,
 ) -> Optional[GarmentItem]:
     """
     Select the best garment from *pool* for the given type, formality chain,
-    and optional size preference.
+    size preference, and colour preference.
 
     Selection priority (per formality tier, in chain order):
       For each tier:
-        1. Unused, size-matched, event-appropriate
+        1. Unused, size-matched, colour-scored, event-appropriate
         2. Unused, event-appropriate (no size match required)
-        3. Already-used, size-matched, event-appropriate
+        3. Already-used, size-matched, colour-scored, event-appropriate
         4. Already-used, event-appropriate
       After exhausting all explicit tiers:
         5. Garments with formality=None (untagged) — treated as last resort
@@ -244,6 +330,11 @@ def _pick_garment(
            never silently dropped.
       Final fallback:
         6. None — no appropriate garment found
+
+    Colour scoring (via :func:`_score_color_preference`) applies a penalty for
+    avoided colours and a bonus for favourite colours or matching colour tone.
+    Items with a negative colour score are deprioritised relative to
+    colour-neutral or colour-positive items within the same tier.
     """
     candidates = [
         g for g in pool
@@ -252,29 +343,38 @@ def _pick_garment(
     if not candidates:
         return None
 
-    # Sort by times_recommended ascending to promote variety across generations.
-    candidates.sort(key=lambda g: g.times_recommended)
+    # Primary sort: times_recommended ascending (variety); tiebreak: colour score descending.
+    candidates.sort(
+        key=lambda g: (g.times_recommended, -_score_color_preference(g, user_profile))
+    )
 
     def formality_matches(g: GarmentItem, tier: frozenset[str]) -> bool:
         return g.formality is not None and g.formality.value in tier
 
     def _pick_from(subset: list[GarmentItem]) -> Optional[GarmentItem]:
-        """Return the best item from *subset* applying size preference."""
+        """Return the best item from *subset* applying size and colour preference."""
         if not subset:
             return None
         unused = [g for g in subset if g.id not in used_ids]
         in_use = [g for g in subset if g.id in used_ids]
-        if user_size_label:
-            unused_sized = [g for g in unused if _size_matches(g, user_size_label)]
-            if unused_sized:
-                return unused_sized[0]
-        if unused:
-            return unused[0]
-        if user_size_label:
-            used_sized = [g for g in in_use if _size_matches(g, user_size_label)]
-            if used_sized:
-                return used_sized[0]
-        return in_use[0] if in_use else None
+
+        # Within unused: prefer items with a non-negative colour score.
+        def _best(items: list[GarmentItem]) -> Optional[GarmentItem]:
+            if not items:
+                return None
+            # Filter out strongly-avoided items if alternatives exist.
+            not_avoided = [g for g in items if _score_color_preference(g, user_profile) >= 0]
+            pool = not_avoided if not_avoided else items
+            if user_size_label:
+                sized = [g for g in pool if _size_matches(g, user_size_label)]
+                if sized:
+                    return sized[0]
+            return pool[0]
+
+        result = _best(unused)
+        if result is not None:
+            return result
+        return _best(in_use)
 
     for tier in formality_chain:
         tier_candidates = [g for g in candidates if formality_matches(g, tier)]
@@ -309,6 +409,7 @@ async def generate_week_recommendations(
     events: list[WeekEvent],
     user_gender: Optional[str] = None,
     measurements: Optional[BodyMeasurements] = None,
+    user_profile: Optional[UserProfile] = None,
 ) -> list[DayOutfitSuggestion]:
     """
     Generate one :class:`DayOutfitSuggestion` per event in *events*.
@@ -317,12 +418,14 @@ async def generate_week_recommendations(
     LLM (with garment images forwarded when available).
 
     Args:
-        wardrobe:     All garments belonging to the user. May be empty.
-        events:       The user's week plan. Each entry describes one day.
-        user_gender:  Optional gender string (``"male"``, ``"female"``, ``"other"``).
-                      When set, garments tagged for the opposite binary gender are
-                      excluded before selection begins.
-        measurements: Optional body measurements used for soft size-band scoring.
+        wardrobe:      All garments belonging to the user. May be empty.
+        events:        The user's week plan. Each entry describes one day.
+        user_gender:   Optional gender string (``"male"``, ``"female"``, ``"other"``).
+                       When set, garments tagged for the opposite binary gender are
+                       excluded before selection begins.
+        measurements:  Optional body measurements used for soft size-band scoring.
+        user_profile:  Optional extended style profile used for colour preference
+                       scoring (favourite/avoided colours and colour tone).
 
     Returns:
         A list of :class:`DayOutfitSuggestion` objects in the same order as
@@ -364,11 +467,13 @@ async def generate_week_recommendations(
             wardrobe, _is_top, formality_chain, used_ids,
             event_type=event.event_type,
             user_size_label=user_size_label,
+            user_profile=user_profile,
         )
         bottom = _pick_garment(
             wardrobe, _is_bottom, formality_chain, used_ids,
             event_type=event.event_type,
             user_size_label=user_size_label,
+            user_profile=user_profile,
         )
 
         # If top or bottom is missing, try a dress as a fallback
@@ -378,6 +483,7 @@ async def generate_week_recommendations(
                 wardrobe, _is_dress, formality_chain, used_ids,
                 event_type=event.event_type,
                 user_size_label=user_size_label,
+                user_profile=user_profile,
             )
 
         if dress is not None and (top is None or bottom is None):
