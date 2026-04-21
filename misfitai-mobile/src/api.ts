@@ -1140,7 +1140,6 @@ export function profileUpdateToApiPayload(data: UserProfileUpdate): Record<strin
         hair_color: av.hairColor ?? null,
         body_type: av.bodyType ?? null,
         skin_tone: av.skinTone ?? null,
-        avatar_image_url: av.avatarImageUrl ?? null,
       };
     }
   }

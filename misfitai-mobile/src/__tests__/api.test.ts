@@ -218,7 +218,6 @@ describe('profileUpdateToApiPayload', () => {
         hairColor: 'black',
         bodyType: 'slim',
         skinTone: 'medium_dark',
-        avatarImageUrl: 'https://example.com/av.jpg',
       },
     });
     const cfg = payload.avatar_config as Record<string, unknown>;
@@ -227,7 +226,6 @@ describe('profileUpdateToApiPayload', () => {
     expect(cfg.hair_color).toBe('black');
     expect(cfg.body_type).toBe('slim');
     expect(cfg.skin_tone).toBe('medium_dark');
-    expect(cfg.avatar_image_url).toBe('https://example.com/av.jpg');
   });
 
   it('sends avatar_config: null when avatarConfig is explicitly null', () => {
