@@ -1,0 +1,25 @@
+.gcloudignore
+.git
+.gitignore
+.DS_Store
+
+# Local environments and generated caches
+.venv/
+__pycache__/
+*.pyc
+
+# Local env files (secrets come from Secret Manager on Cloud Run)
+.env
+.env.local
+misfitai-mobile/.env
+misfitai-mobile/.env.local
+
+# Frontend dev/build artifacts not needed for backend deploy
+misfitai-mobile/node_modules/
+misfitai-mobile/.expo/
+misfitai-mobile/dist/
+
+# Large local artifacts not needed in backend image
+outputs/
+vision/models/
+yolov8n.pt

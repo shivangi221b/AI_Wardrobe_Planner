@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useAppState } from './AppStateContext';
 import { getApiErrorMessage, isApiError, type VisionPreviewItem } from './api';
+import { ReceiptIngestCard, type ConfirmedReceiptItem } from './ReceiptIngestCard';
 import { getImageForGarment, shoesImage } from './stockImages';
 import { SearchableSelect } from './SearchableSelect';
 import {
@@ -53,6 +54,7 @@ export function WardrobeScreen({
   isStepComplete: boolean;
 }) {
   const {
+    userId,
     garments,
     isLoadingWardrobe,
     wardrobeError,
@@ -106,7 +108,7 @@ export function WardrobeScreen({
   );
   const [searchAdding, setSearchAdding] = useState(false);
   const [visibleSearchCount, setVisibleSearchCount] = useState(8);
-  const [addMode, setAddMode] = useState<'vision' | 'manual'>('vision');
+  const [addMode, setAddMode] = useState<'vision' | 'manual' | 'receipt'>('vision');
   const [wardrobeFilter, setWardrobeFilter] = useState<
     'all' | 'top' | 'bottom' | 'shoes' | 'accessory'
   >('all');
@@ -346,6 +348,29 @@ export function WardrobeScreen({
     }
   };
 
+  const handleReceiptAdd = async (items: ConfirmedReceiptItem[]): Promise<void> => {
+    for (const item of items) {
+      try {
+        await addGarmentToWardrobe({
+          name: item.name,
+          category: item.category,
+          color: item.color,
+          seasonality: 'all_season',
+          brand: item.brand,
+          size: item.size,
+          price: item.price,
+        });
+      } catch (error) {
+        throw new Error(
+          getApiErrorMessage(error, `Could not add "${item.name}" from receipt.`)
+        );
+      }
+    }
+    showWardrobeSaved(
+      `${items.length} item${items.length === 1 ? '' : 's'} added from receipt!`
+    );
+  };
+
   // Keep explicit delete confirmation to avoid accidental wardrobe item removal.
   const handleDeletePress = (garment: { id: string; name: string }) => {
     const doDelete = () => {
@@ -425,6 +450,14 @@ export function WardrobeScreen({
               >
                 <Text style={[styles.chipText, addMode === 'manual' && styles.chipTextActive]}>
                   Describe item
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setAddMode('receipt')}
+                style={[styles.chip, addMode === 'receipt' && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, addMode === 'receipt' && styles.chipTextActive]}>
+                  Receipt
                 </Text>
               </Pressable>
             </View>
@@ -919,6 +952,10 @@ export function WardrobeScreen({
                   {searchError ? <Text style={styles.errorText}>{searchError}</Text> : null}
                 </View>
               </>
+            ) : null}
+
+            {addMode === 'receipt' ? (
+              <ReceiptIngestCard userId={userId} onAddItems={handleReceiptAdd} />
             ) : null}
 
           </View>

@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -21,7 +21,14 @@ from starlette.concurrency import run_in_threadpool
 
 from vision.extractor import ExtractedGarmentAsset, extract_garments_from_image
 
-from .db import delete_garment, get_measurements, insert_garment, set_garment_hidden, upsert_measurements
+from .db import (
+    delete_garment,
+    get_measurements,
+    insert_garment,
+    save_style_preferences,
+    set_garment_hidden,
+    upsert_measurements,
+)
 from .models import (
     BodyMeasurements,
     GarmentCategory,
@@ -35,7 +42,21 @@ from .models import (
     MediaType,
     WeekEvent,
 )
-from .routers import analytics_router, auth_router, recommendations, weather_router, calendar_router, profile_router, avatar_router
+from .receipt_parser import (
+    extract_text_from_pdf_bytes,
+    infer_category as infer_receipt_category,
+    parse_receipt_image_bytes,
+    parse_receipt_text,
+)
+from .routers import (
+    analytics_router,
+    auth_router,
+    avatar_router,
+    calendar_router,
+    profile_router,
+    recommendations,
+    weather_router,
+)
 from .routers.analytics_router import public_metrics_router
 from .storage import get_wardrobe, get_week_events as _storage_get_week_events, store_week_events
 
@@ -115,6 +136,10 @@ class AddGarmentRequest(BaseModel):
     seasonality: Optional[GarmentSeasonality] = None
     primary_image_url: HttpUrl
     gender: Optional[GarmentGender] = None
+    brand: Optional[str] = None
+    size: Optional[str] = None
+    fit_notes: Optional[str] = None
+    price: Optional[float] = None
 
 
 class SearchGarmentRequest(BaseModel):
@@ -190,6 +215,24 @@ def _safe_seasonality(value: Optional[str]) -> Optional[GarmentSeasonality]:
         return None
 
 
+def _merge_fit_notes_with_price(
+    fit_notes: Optional[str],
+    price: Optional[float],
+) -> Optional[str]:
+    notes = (fit_notes or "").strip()
+    if price is None:
+        return notes or None
+    try:
+        price_note = f"Receipt price: ${float(price):.2f}"
+    except Exception:
+        return notes or None
+    if not notes:
+        return price_note
+    if price_note.lower() in notes.lower():
+        return notes
+    return f"{notes} | {price_note}"
+
+
 # Keep ingestion jobs in-memory for now; wardrobe lives in Supabase.
 _jobs: dict[str, MediaIngestionJob] = {}
 
@@ -260,6 +303,7 @@ def add_wardrobe_item(user_id: str, request: AddGarmentRequest) -> GarmentItem:
     now = datetime.utcnow()
     formality = request.formality or GarmentFormality.CASUAL
     seasonality = request.seasonality or GarmentSeasonality.ALL_SEASON
+    fit_notes = _merge_fit_notes_with_price(request.fit_notes, request.price)
     tags = build_garment_tags(
         category=request.category,
         formality=formality,
@@ -275,11 +319,205 @@ def add_wardrobe_item(user_id: str, request: AddGarmentRequest) -> GarmentItem:
         formality=formality,
         seasonality=seasonality,
         gender=request.gender,
+        brand=request.brand,
+        size=request.size,
+        fit_notes=fit_notes,
         tags=tags,
         created_at=now,
         updated_at=now,
     )
     return insert_garment(garment)
+
+
+class BulkAddGarmentRequest(BaseModel):
+    items: List[AddGarmentRequest]
+
+
+@app.post("/wardrobe/{user_id}/items/bulk", response_model=List[GarmentItem])
+def add_wardrobe_items_bulk(user_id: str, request: BulkAddGarmentRequest) -> List[GarmentItem]:
+    now = datetime.utcnow()
+    results: List[GarmentItem] = []
+    for item_req in request.items:
+        formality = item_req.formality or GarmentFormality.CASUAL
+        seasonality = item_req.seasonality or GarmentSeasonality.ALL_SEASON
+        fit_notes = _merge_fit_notes_with_price(item_req.fit_notes, item_req.price)
+        tags = build_garment_tags(
+            category=item_req.category,
+            formality=formality,
+            seasonality=seasonality,
+        )
+        garment = GarmentItem(
+            id=str(uuid4()),
+            user_id=user_id,
+            primary_image_url=item_req.primary_image_url,
+            category=item_req.category,
+            sub_category=item_req.name,
+            color_primary=item_req.color,
+            formality=formality,
+            seasonality=seasonality,
+            gender=item_req.gender,
+            brand=item_req.brand,
+            size=item_req.size,
+            fit_notes=fit_notes,
+            tags=tags,
+            created_at=now,
+            updated_at=now,
+        )
+        results.append(insert_garment(garment))
+    return results
+
+
+class StylePreferencesRequest(BaseModel):
+    aesthetics: List[str] = []
+    brands: List[str] = []
+    color_tones: List[str] = []
+
+
+@app.post("/users/{user_id}/style-preferences", status_code=204)
+def save_user_style_preferences(user_id: str, body: StylePreferencesRequest) -> None:
+    save_style_preferences(user_id, body.aesthetics, body.brands, body.color_tones)
+
+
+class ReceiptParseRequest(BaseModel):
+    source: Literal["text", "email"] = "text"
+    content: str
+
+
+class ReceiptParsedItem(BaseModel):
+    name: str
+    brand: Optional[str] = None
+    size: Optional[str] = None
+    color: Optional[str] = None
+    category: GarmentCategory
+    price: Optional[float] = None
+    confidence: float = 0.0
+    needs_confirmation: bool = True
+    source_line: Optional[str] = None
+
+
+class ReceiptParseResponse(BaseModel):
+    source: str
+    parser_strategy: str
+    parsed_items: List[ReceiptParsedItem]
+    extracted_text_preview: Optional[str] = None
+
+
+def _normalize_receipt_items(raw_items: list[dict], source: str) -> List[ReceiptParsedItem]:
+    normalized: List[ReceiptParsedItem] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        color = item.get("color")
+        parsed_category = str(item.get("category") or "").strip().lower()
+        if not parsed_category:
+            parsed_category = infer_receipt_category(name)
+        try:
+            category = GarmentCategory(parsed_category)
+        except Exception:
+            category = GarmentCategory.TOP
+        try:
+            confidence = max(0.0, min(0.99, float(item.get("confidence", 0.0))))
+        except Exception:
+            confidence = 0.0
+        try:
+            price = float(item["price"]) if item.get("price") not in (None, "") else None
+        except Exception:
+            price = None
+        normalized.append(
+            ReceiptParsedItem(
+                name=name,
+                brand=(str(item.get("brand")).strip() if item.get("brand") else None),
+                size=(str(item.get("size")).strip() if item.get("size") else None),
+                color=(str(color).strip().lower() if color else None),
+                category=category,
+                price=round(price, 2) if price is not None else None,
+                confidence=round(confidence, 2),
+                needs_confirmation=bool(item.get("needs_confirmation", confidence < 0.75)),
+                source_line=(str(item.get("source_line")).strip() if item.get("source_line") else None),
+            )
+        )
+    return normalized
+
+
+def _receipt_response(
+    *,
+    source: str,
+    parser_strategy: str,
+    raw_items: list[dict],
+    extracted_text: Optional[str] = None,
+) -> ReceiptParseResponse:
+    preview = (extracted_text or "").strip()
+    if len(preview) > 600:
+        preview = preview[:600].rstrip() + "..."
+    return ReceiptParseResponse(
+        source=source,
+        parser_strategy=parser_strategy,
+        parsed_items=_normalize_receipt_items(raw_items, source=source),
+        extracted_text_preview=preview or None,
+    )
+
+
+@app.post("/wardrobe/{user_id}/receipt/parse", response_model=ReceiptParseResponse)
+def parse_receipt_text_endpoint(user_id: str, body: ReceiptParseRequest) -> ReceiptParseResponse:
+    _ = user_id  # included for future per-user parser personalization.
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Receipt text cannot be empty.")
+    parsed = parse_receipt_text(content, source=body.source)
+    return _receipt_response(
+        source=body.source,
+        parser_strategy="text_rules",
+        raw_items=parsed,
+        extracted_text=content,
+    )
+
+
+@app.post("/wardrobe/{user_id}/receipt/parse-upload", response_model=ReceiptParseResponse)
+async def parse_receipt_upload_endpoint(
+    user_id: str,
+    source: str = Form("upload"),
+    file: UploadFile = File(...),
+) -> ReceiptParseResponse:
+    _ = user_id  # path parity with other wardrobe routes.
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded receipt file is empty.")
+
+    filename = (file.filename or "").lower()
+    mime = (file.content_type or "").lower()
+
+    if mime.startswith("image/"):
+        try:
+            items = await run_in_threadpool(parse_receipt_image_bytes, content, mime or "image/jpeg")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return _receipt_response(
+            source=source or "screenshot",
+            parser_strategy="image_vision_rules",
+            raw_items=items,
+        )
+
+    if "pdf" in mime or filename.endswith(".pdf"):
+        extracted_text = await run_in_threadpool(extract_text_from_pdf_bytes, content)
+        parsed = parse_receipt_text(extracted_text, source="pdf")
+        return _receipt_response(
+            source=source or "pdf",
+            parser_strategy="pdf_text_rules",
+            raw_items=parsed,
+            extracted_text=extracted_text,
+        )
+
+    decoded = content.decode("utf-8", errors="ignore")
+    parsed = parse_receipt_text(decoded, source=source or "upload")
+    return _receipt_response(
+        source=source or "upload",
+        parser_strategy="plain_text_rules",
+        raw_items=parsed,
+        extracted_text=decoded,
+    )
 
 
 @app.post("/wardrobe/{user_id}/search-garment", response_model=List[SearchGarmentResult])

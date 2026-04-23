@@ -34,91 +34,6 @@ const VISION_REQUEST_RETRIES = 2;
 const VISION_RETRY_BACKOFF_MS = 450;
 const VISION_FILE_FETCH_TIMEOUT_MS = 45000;
 
-export interface EmailAuthResult {
-  userId: string;
-  email: string;
-}
-
-const mockEmailPasswordStore = new Map<string, string>();
-
-function deriveEmailUserId(emailNormalized: string): string {
-  return `email-${emailNormalized.replace(/@/g, '-at-').replace(/\./g, '-dot-')}`;
-}
-
-/** Register with email + password (persists via ``POST /auth/register`` when not using mock API). */
-export async function registerEmailPassword(
-  email: string,
-  password: string
-): Promise<EmailAuthResult> {
-  const trimmed = email.trim();
-  if (USE_MOCK_API) {
-    const normalized = trimmed.toLowerCase();
-    if (mockEmailPasswordStore.has(normalized)) {
-      throw new ApiError('Account exists', 409, JSON.stringify({ detail: 'exists' }));
-    }
-    mockEmailPasswordStore.set(normalized, password);
-    return { userId: deriveEmailUserId(normalized), email: normalized };
-  }
-
-  const response = await fetch(`${API_BASE_URL}/auth/register`, {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: trimmed, password }),
-  });
-  const rawBody = await response.text();
-  if (!response.ok) {
-    throw new ApiError(
-      `API request failed: ${response.status} ${response.statusText}`,
-      response.status,
-      rawBody
-    );
-  }
-  const data = JSON.parse(rawBody) as { user_id?: string; email?: string };
-  const userId = (data.user_id || '').trim();
-  const normalizedEmail = (data.email || '').trim().toLowerCase();
-  if (!userId || !normalizedEmail) {
-    throw new ApiError('Invalid auth response', 502, rawBody);
-  }
-  return { userId, email: normalizedEmail };
-}
-
-/** Log in with email + password (``POST /auth/login``). */
-export async function loginEmailPassword(
-  email: string,
-  password: string
-): Promise<EmailAuthResult> {
-  const trimmed = email.trim();
-  if (USE_MOCK_API) {
-    const normalized = trimmed.toLowerCase();
-    const stored = mockEmailPasswordStore.get(normalized);
-    if (!stored || stored !== password) {
-      throw new ApiError('Invalid credentials', 401, JSON.stringify({ detail: 'invalid' }));
-    }
-    return { userId: deriveEmailUserId(normalized), email: normalized };
-  }
-
-  const response = await fetch(`${API_BASE_URL}/auth/login`, {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: trimmed, password }),
-  });
-  const rawBody = await response.text();
-  if (!response.ok) {
-    throw new ApiError(
-      `API request failed: ${response.status} ${response.statusText}`,
-      response.status,
-      rawBody
-    );
-  }
-  const data = JSON.parse(rawBody) as { user_id?: string; email?: string };
-  const userId = (data.user_id || '').trim();
-  const normalizedEmail = (data.email || '').trim().toLowerCase();
-  if (!userId || !normalizedEmail) {
-    throw new ApiError('Invalid auth response', 502, rawBody);
-  }
-  return { userId, email: normalizedEmail };
-}
-
 /** After OAuth login, record user for GET /api/metrics ``signups`` (no wardrobe required). */
 export function registerSignupWithBackend(userId: string): void {
   if (!userId?.trim() || USE_MOCK_API) return;
@@ -171,6 +86,8 @@ interface WardrobeApiItem {
   pattern?: string | null;
   material?: string | null;
   fit_notes?: string | null;
+  brand?: string | null;
+  size?: string | null;
   formality?: string | null;
   seasonality?: string | null;
   primary_image_url?: string;
@@ -213,11 +130,15 @@ interface RecommendationApi {
 
 export interface AddGarmentPayload {
   name: string;
-  category: 'top' | 'bottom' | 'shoes' | 'accessory';
+  category: GarmentCategory;
   color?: string;
   formality?: GarmentFormality;
   seasonality?: GarmentSeasonality;
   primaryImageUrl?: string;
+  brand?: string;
+  size?: string;
+  fitNotes?: string;
+  price?: number;
 }
 
 export interface VisionAddPayload {
@@ -368,6 +289,8 @@ function mapGarment(item: WardrobeApiItem): Garment {
     pattern: item.pattern?.trim() || undefined,
     material: item.material?.trim() || undefined,
     fitNotes: item.fit_notes?.trim() || undefined,
+    brand: item.brand?.trim() || undefined,
+    size: item.size?.trim() || undefined,
     gender: normalizeGarmentGender(item.gender),
     timesRecommended: item.times_recommended ?? 0,
     hiddenFromRecommendations: item.hidden_from_recommendations ?? false,
@@ -546,6 +469,9 @@ async function mockAddGarment(
     color: payload.color ?? '',
     formality: payload.formality ?? 'casual',
     primaryImageUrl: payload.primaryImageUrl,
+    brand: payload.brand,
+    size: payload.size,
+    fitNotes: payload.fitNotes,
   };
   wardrobe.unshift(item);
   return item;
@@ -696,20 +622,17 @@ async function readImageBlobWithRetry(payload: VisionAddPayload): Promise<Blob> 
       const timeoutId = controller
         ? setTimeout(() => controller.abort(), VISION_FILE_FETCH_TIMEOUT_MS)
         : null;
-      try {
-        const response = await fetch(
-          payload.imageUri,
-          controller ? { signal: controller.signal } : undefined
-        );
-        if (!response.ok) {
-          throw new Error(`Failed to read selected image (${response.status}).`);
-        }
-        return await response.blob();
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
+      const response = await fetch(
+        payload.imageUri,
+        controller ? { signal: controller.signal } : undefined
+      );
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
+      if (!response.ok) {
+        throw new Error(`Failed to read selected image (${response.status}).`);
+      }
+      return await response.blob();
     } catch (error) {
       if (attempt >= VISION_REQUEST_RETRIES) {
         throw error;
@@ -724,18 +647,7 @@ function getVisionUploadFileName(payload: VisionAddPayload): string {
   if (payload.fileName?.trim()) {
     return payload.fileName.trim();
   }
-  const normalizedMimeType = payload.mimeType?.trim().toLowerCase();
-  let extension = 'jpg';
-  if (normalizedMimeType === 'image/png') {
-    extension = 'png';
-  } else if (
-    normalizedMimeType === 'image/jpeg' ||
-    normalizedMimeType === 'image/jpg'
-  ) {
-    extension = 'jpg';
-  } else if (normalizedMimeType === 'image/webp') {
-    extension = 'webp';
-  }
+  const extension = payload.mimeType?.includes('png') ? 'png' : 'jpg';
   return `wardrobe-upload-${Date.now()}.${extension}`;
 }
 
@@ -771,6 +683,10 @@ export async function addGarment(
         color: payload.color,
         formality: payload.formality ?? 'casual',
         seasonality: payload.seasonality ?? 'all_season',
+        brand: payload.brand,
+        size: payload.size,
+        fit_notes: payload.fitNotes,
+        price: payload.price,
         primary_image_url:
           payload.primaryImageUrl ?? 'https://example.com/garment-placeholder.jpg',
       }),
@@ -908,6 +824,229 @@ export async function confirmSearchAdd(
     seasonality: payload.seasonality,
     primaryImageUrl: payload.imageUrl,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Receipt parsing (onboarding add-from-receipt)
+// ---------------------------------------------------------------------------
+
+export type ReceiptParseSource = 'text' | 'email' | 'pdf' | 'screenshot' | 'upload';
+
+interface ReceiptParsedItemApi {
+  name?: string;
+  brand?: string | null;
+  size?: string | null;
+  color?: string | null;
+  category?: string;
+  price?: number | null;
+  confidence?: number;
+  needs_confirmation?: boolean;
+  source_line?: string | null;
+}
+
+interface ReceiptParseResponseApi {
+  source?: string;
+  parser_strategy?: string;
+  parsed_items?: ReceiptParsedItemApi[];
+  extracted_text_preview?: string | null;
+}
+
+export interface ReceiptParsedItem {
+  name: string;
+  brand?: string | null;
+  size?: string | null;
+  color?: string | null;
+  category: GarmentCategory;
+  price?: number | null;
+  confidence: number;
+  needsConfirmation: boolean;
+  sourceLine?: string | null;
+}
+
+export interface ReceiptParseResponse {
+  source: string;
+  parserStrategy: string;
+  parsedItems: ReceiptParsedItem[];
+  extractedTextPreview?: string | null;
+}
+
+function mapReceiptParsedItem(raw: ReceiptParsedItemApi): ReceiptParsedItem | null {
+  const name = (raw.name || '').trim();
+  if (!name) {
+    return null;
+  }
+  const category = normalizeCategory(raw.category);
+  const confidence = Number.isFinite(raw.confidence) ? Number(raw.confidence) : 0;
+  const price = Number.isFinite(raw.price) ? Number(raw.price) : null;
+  return {
+    name,
+    brand: raw.brand?.trim() || null,
+    size: raw.size?.trim() || null,
+    color: raw.color?.trim() || null,
+    category,
+    price,
+    confidence: Math.max(0, Math.min(0.99, confidence)),
+    needsConfirmation: raw.needs_confirmation ?? confidence < 0.75,
+    sourceLine: raw.source_line?.trim() || null,
+  };
+}
+
+function mapReceiptParseResponse(raw: ReceiptParseResponseApi): ReceiptParseResponse {
+  const parsedItems = Array.isArray(raw.parsed_items)
+    ? raw.parsed_items
+        .map(mapReceiptParsedItem)
+        .filter((item): item is ReceiptParsedItem => Boolean(item))
+    : [];
+  return {
+    source: (raw.source || 'upload').trim() || 'upload',
+    parserStrategy: (raw.parser_strategy || 'text_rules').trim() || 'text_rules',
+    parsedItems,
+    extractedTextPreview: raw.extracted_text_preview ?? null,
+  };
+}
+
+function mockParseReceipt(content: string, source: ReceiptParseSource): ReceiptParseResponse {
+  const lines = content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const parsedItems: ReceiptParsedItem[] = [];
+  lines.forEach((line) => {
+    const lower = line.toLowerCase();
+    if (/(subtotal|total|tax|shipping|discount)/.test(lower)) {
+      return;
+    }
+    const priceMatch = line.match(/\$?\s*(\d{1,4}(?:[.,]\d{2})?)/);
+    const parsedPrice = priceMatch ? parseFloat(priceMatch[1].replace(',', '.')) : null;
+    const cleaned = line
+      .replace(/\$?\s*\d{1,4}(?:[.,]\d{2})?/g, '')
+      .replace(/\b(?:subtotal|total|tax|shipping|discount)\b/gi, '')
+      .trim();
+    if (!cleaned) return;
+
+    parsedItems.push({
+      name: cleaned,
+      category: normalizeCategory(
+        /shoe|sneaker|boot|loafer/.test(lower)
+          ? 'shoes'
+          : /jean|pant|trouser|short|skirt/.test(lower)
+            ? 'bottom'
+            : /jacket|coat|parka|trench/.test(lower)
+              ? 'outerwear'
+              : /dress/.test(lower)
+                ? 'dress'
+                : /bag|belt|watch|hat|scarf/.test(lower)
+                  ? 'accessory'
+                  : 'top'
+      ),
+      price: Number.isFinite(parsedPrice) ? parsedPrice : null,
+      confidence: 0.6,
+      needsConfirmation: true,
+      sourceLine: line,
+    });
+  });
+  return {
+    source,
+    parserStrategy: 'mock_rules',
+    parsedItems,
+    extractedTextPreview: content.trim().slice(0, 600),
+  };
+}
+
+async function readFileBlobWithRetry(
+  fileUri: string,
+  timeoutMs = VISION_FILE_FETCH_TIMEOUT_MS
+): Promise<Blob> {
+  let attempt = 0;
+  while (true) {
+    try {
+      const controller =
+        typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      const response = await fetch(
+        fileUri,
+        controller ? { signal: controller.signal } : undefined
+      );
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (!response.ok) {
+        throw new Error(`Failed to read selected file (${response.status}).`);
+      }
+      return await response.blob();
+    } catch (error) {
+      if (attempt >= VISION_REQUEST_RETRIES) {
+        throw error;
+      }
+      await sleep(VISION_RETRY_BACKOFF_MS * 2 ** attempt);
+      attempt += 1;
+    }
+  }
+}
+
+function deriveUploadFileName(fileName?: string, mimeType?: string): string {
+  if (fileName?.trim()) {
+    return fileName.trim();
+  }
+  if (mimeType?.includes('pdf')) {
+    return `receipt-${Date.now()}.pdf`;
+  }
+  if (mimeType?.includes('png')) {
+    return `receipt-${Date.now()}.png`;
+  }
+  return `receipt-${Date.now()}.jpg`;
+}
+
+export async function parseReceiptTextContent(
+  userId: string,
+  source: Extract<ReceiptParseSource, 'text' | 'email'>,
+  content: string
+): Promise<ReceiptParseResponse> {
+  if (USE_MOCK_API) {
+    return mockParseReceipt(content, source);
+  }
+  const response = await requestJson<ReceiptParseResponseApi>(
+    `/wardrobe/${encodeURIComponent(userId)}/receipt/parse`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        source,
+        content,
+      }),
+    }
+  );
+  return mapReceiptParseResponse(response);
+}
+
+export async function parseReceiptUploadFile(
+  userId: string,
+  payload: {
+    source?: ReceiptParseSource;
+    fileUri: string;
+    fileName?: string;
+    mimeType?: string;
+  }
+): Promise<ReceiptParseResponse> {
+  if (USE_MOCK_API) {
+    const seed = payload.source === 'pdf' ? 'PDF upload' : 'Screenshot upload';
+    return mockParseReceipt(seed, payload.source || 'upload');
+  }
+  const blob = await readFileBlobWithRetry(payload.fileUri);
+  const formData = new FormData();
+  formData.append('source', payload.source ?? 'upload');
+  formData.append(
+    'file',
+    blob,
+    deriveUploadFileName(payload.fileName, payload.mimeType || blob.type)
+  );
+  const response = await requestJson<ReceiptParseResponseApi>(
+    `/wardrobe/${encodeURIComponent(userId)}/receipt/parse-upload`,
+    {
+      method: 'POST',
+      body: formData,
+    }
+  );
+  return mapReceiptParseResponse(response);
 }
 
 export async function saveWeekEvents(
@@ -1305,6 +1444,87 @@ export async function deleteGarment(userId: string, garmentId: string): Promise<
     `/wardrobe/${encodeURIComponent(userId)}/${encodeURIComponent(garmentId)}`,
     { method: 'DELETE' }
   );
+}
+
+// ---------------------------------------------------------------------------
+// Style preferences
+// ---------------------------------------------------------------------------
+
+export interface StylePreferencesPayload {
+  aesthetics: string[];
+  brands: string[];
+  colorTones: string[];
+}
+
+export async function saveStylePreferences(
+  userId: string,
+  payload: StylePreferencesPayload
+): Promise<void> {
+  if (USE_MOCK_API) return;
+  await requestJson<void>(
+    `/users/${encodeURIComponent(userId)}/style-preferences`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        aesthetics: payload.aesthetics,
+        brands: payload.brands,
+        color_tones: payload.colorTones,
+      }),
+    }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bulk add garments (onboarding starter wardrobe)
+// ---------------------------------------------------------------------------
+
+export async function addGarmentsBulk(
+  userId: string,
+  items: AddGarmentPayload[]
+): Promise<Garment[]> {
+  if (!items.length) return [];
+  if (USE_MOCK_API) {
+    const results: Garment[] = [];
+    for (const item of items) {
+      results.push(await mockAddGarment(userId, item));
+    }
+    return results;
+  }
+  try {
+    const response = await requestJson<WardrobeApiItem[]>(
+      `/wardrobe/${encodeURIComponent(userId)}/items/bulk`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          items: items.map((item) => ({
+            name: item.name,
+            category: item.category,
+            color: item.color ?? '',
+            formality: item.formality ?? 'casual',
+            seasonality: item.seasonality ?? 'all_season',
+            brand: item.brand,
+            size: item.size,
+            fit_notes: item.fitNotes,
+            price: item.price,
+            primary_image_url:
+              item.primaryImageUrl ?? 'https://example.com/garment-placeholder.jpg',
+          })),
+        }),
+      }
+    );
+    if (!Array.isArray(response)) return [];
+    return response.map(mapGarment);
+  } catch (error) {
+    // Backward compatibility for older backends that do not implement /items/bulk.
+    if (isApiError(error) && (error.status === 404 || error.status === 405)) {
+      const created: Garment[] = [];
+      for (const item of items) {
+        created.push(await addGarment(userId, item));
+      }
+      return created;
+    }
+    throw error;
+  }
 }
 
 export async function syncCalendarEvents(

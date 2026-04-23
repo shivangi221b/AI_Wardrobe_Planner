@@ -16,6 +16,7 @@ rembg
 onnxruntime
 Pillow
 pillow-heif
+pypdf
 python-multipart
 supabase
 bcrypt
@@ -25,4 +26,3 @@ google-analytics-data
 pytest
 pytest-asyncio
 pytest-cov
-

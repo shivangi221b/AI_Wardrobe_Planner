@@ -13,6 +13,7 @@ import type {
   DayRecommendation,
   EventType,
   Garment,
+  GarmentCategory,
   GarmentSeasonality,
   GarmentFormality,
 } from './types';
@@ -64,10 +65,14 @@ interface AppState {
   addGarmentToWardrobe: (
     payload: {
       name: string;
-      category: 'top' | 'bottom' | 'shoes' | 'accessory';
+      category: GarmentCategory;
       color?: string;
       formality?: GarmentFormality;
       seasonality?: GarmentSeasonality;
+      brand?: string;
+      size?: string;
+      fitNotes?: string;
+      price?: number;
     }
   ) => Promise<void>;
   addGarmentViaVision: (payload: VisionAddPayload) => Promise<void>;
@@ -304,10 +309,14 @@ export function AppStateProvider({
 
   const addGarmentToWardrobe = useCallback(async (payload: {
     name: string;
-    category: 'top' | 'bottom' | 'shoes' | 'accessory';
+    category: GarmentCategory;
     color?: string;
     formality?: GarmentFormality;
     seasonality?: GarmentSeasonality;
+    brand?: string;
+    size?: string;
+    fitNotes?: string;
+    price?: number;
   }): Promise<void> => {
     const created = await addGarment(userId, payload);
     setGarments((current) => {

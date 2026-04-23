@@ -294,3 +294,18 @@ class WeekRecommendationResponse(BaseModel):
 
     user_id: str
     recommendations: List[DayOutfitSuggestion]
+
+
+# ---------------------------------------------------------------------------
+# Style preferences
+# ---------------------------------------------------------------------------
+
+
+class StylePreferences(BaseModel):
+    """User-stated style preferences captured during onboarding."""
+
+    user_id: str
+    aesthetics: List[str] = []
+    brands: List[str] = []
+    color_tones: List[str] = []
+    updated_at: Optional[datetime] = None
