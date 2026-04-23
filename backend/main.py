@@ -281,8 +281,8 @@ async def search_garment_images(user_id: str, request: SearchGarmentRequest) -> 
 
     Uses SerpAPI Google Images search to fetch product-style photos.
     One request by default (`num` = client limit). If post-filter keeps fewer than
-    ``max(2, (limit + 1) // 2)`` results, a second page is fetched (`ijn=1`), merged,
-    and re-filtered (at most 2 SerpAPI calls per wardrobe search).
+    ``min(limit, max(2, (limit + 1) // 2))`` rows, a second page is fetched (`ijn=1`),
+    merged, deduped, and re-filtered (at most 2 SerpAPI calls per wardrobe search).
 
     Env required:
       - SERPAPI_KEY
@@ -322,8 +322,9 @@ async def search_garment_images(user_id: str, request: SearchGarmentRequest) -> 
         "num": str(limit),
     }
 
-    # Second SerpAPI page only when post-filter keeps fewer than this many (min 2).
-    backfill_threshold = max(2, (limit + 1) // 2)
+    # Second SerpAPI page when post-filter keeps fewer than this many (min 2, capped by limit).
+    # Cap avoids limit=1 always requesting a second page (threshold 2 > max returnable 1).
+    backfill_threshold = min(limit, max(2, (limit + 1) // 2))
 
     def _dedupe_image_dicts(pages: list[list]) -> list[dict]:
         seen: set[str] = set()

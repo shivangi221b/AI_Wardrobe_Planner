@@ -336,7 +336,8 @@ def filter_and_rank_image_results(
     """
     Drop worst off-topic rows and return up to *limit* items, best scores first.
 
-    If filtering would empty the list, fall back to original order (still capped).
+    If every row would be hard-dropped, fall back to the full list in **score order**
+    (same sort as above), still capped and deduped by image URL.
     """
     items = [it for it in raw_items if isinstance(it, dict)]
     if not items:
