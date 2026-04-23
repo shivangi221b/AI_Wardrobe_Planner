@@ -10,7 +10,7 @@ import { ProfileScreen } from './src/ProfileScreen';
 import { generateAvatar, registerSignupWithBackend, updateUserProfile, USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
-import { ProfileSetupScreen, type ProfileSetupResult } from './src/ProfileSetupScreen';
+import { OnboardingFlow } from './src/OnboardingFlow';
 import { palette, radius, type } from './src/theme';
 import { initAnalytics, trackAuthSuccess } from './src/analytics';
 
@@ -47,8 +47,10 @@ type Session = {
   profile?: UserProfile;
   /** Stable user id derived at auth-time, used for all API calls. */
   userId: string;
-  /** If true, optional profile questions were completed (or intentionally skipped). */
+  /** Legacy flag: profile questions completed pre-onboarding-flow. */
   profileCompleted?: boolean;
+  /** True once the full onboarding wizard (style + starter wardrobe) is done. */
+  onboardingCompleted?: boolean;
 };
 
 const DEMO_WEEK_EVENTS = {
@@ -71,47 +73,6 @@ function deriveUserIdFromProfile(profile?: UserProfile): string {
   return `demo-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function ProfileSetupScreenWithMeasurements({
-  session,
-  setSession,
-}: {
-  session: Session;
-  setSession: React.Dispatch<React.SetStateAction<Session | null>>;
-}) {
-  const { updateMeasurements } = useAppState();
-  return (
-    <ProfileSetupScreen
-      initialProfile={session.profile}
-      onDone={(result: ProfileSetupResult) => {
-        const { profilePatch, measurements, profileUpdate, selfieUri } = result;
-        const next: Session = {
-          ...session,
-          profile: { ...(session.profile ?? {}), ...profilePatch },
-          profileCompleted: true,
-        };
-        setSession(next);
-        AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
-        const hasMeasurements = Object.values(measurements).some((v) => v != null);
-        if (hasMeasurements) {
-          updateMeasurements(measurements).catch(() => {
-            /* non-blocking */
-          });
-        }
-        // Save extended profile data (color preferences, sizes, avatar) non-blocking.
-        // If a selfie was provided, chain avatar generation after the profile is saved.
-        updateUserProfile(next.userId, profileUpdate)
-          .then(() => {
-            if (selfieUri) {
-              return generateAvatar(next.userId, selfieUri);
-            }
-          })
-          .catch(() => {
-            /* non-blocking — avatar generation failure should not block onboarding */
-          });
-      }}
-    />
-  );
-}
 
 function AppContent({
   session,
@@ -366,17 +327,19 @@ function AppInner() {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
 
-  if (session.mode === 'signup' && session.profileCompleted !== true) {
+  const needsOnboarding =
+    session.mode === 'signup' &&
+    !session.onboardingCompleted &&
+    !session.profileCompleted;
+
+  if (needsOnboarding) {
     return (
       <AppStateProvider
         userId={session.userId}
         userGender={session.profile?.gender ?? null}
         googleAccessToken={null}
       >
-        <ProfileSetupScreenWithMeasurements
-          session={session}
-          setSession={setSession}
-        />
+        <OnboardingFlow session={session} setSession={setSession} />
       </AppStateProvider>
     );
   }

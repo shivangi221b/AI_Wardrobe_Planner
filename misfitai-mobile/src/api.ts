@@ -128,7 +128,7 @@ interface RecommendationApi {
 
 export interface AddGarmentPayload {
   name: string;
-  category: 'top' | 'bottom' | 'shoes' | 'accessory';
+  category: GarmentCategory;
   color?: string;
   formality?: GarmentFormality;
   seasonality?: GarmentSeasonality;
@@ -1206,6 +1206,83 @@ export async function deleteGarment(userId: string, garmentId: string): Promise<
     `/wardrobe/${encodeURIComponent(userId)}/${encodeURIComponent(garmentId)}`,
     { method: 'DELETE' }
   );
+}
+
+// ---------------------------------------------------------------------------
+// Style preferences
+// ---------------------------------------------------------------------------
+
+export interface StylePreferencesPayload {
+  aesthetics: string[];
+  brands: string[];
+  colorTones: string[];
+}
+
+export async function saveStylePreferences(
+  userId: string,
+  payload: StylePreferencesPayload
+): Promise<void> {
+  if (USE_MOCK_API) return;
+  await requestJson<void>(
+    `/users/${encodeURIComponent(userId)}/style-preferences`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        aesthetics: payload.aesthetics,
+        brands: payload.brands,
+        color_tones: payload.colorTones,
+      }),
+    }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bulk add garments (onboarding starter wardrobe)
+// ---------------------------------------------------------------------------
+
+export async function addGarmentsBulk(
+  userId: string,
+  items: AddGarmentPayload[]
+): Promise<Garment[]> {
+  if (!items.length) return [];
+  if (USE_MOCK_API) {
+    const results: Garment[] = [];
+    for (const item of items) {
+      results.push(await mockAddGarment(userId, item));
+    }
+    return results;
+  }
+  try {
+    const response = await requestJson<WardrobeApiItem[]>(
+      `/wardrobe/${encodeURIComponent(userId)}/items/bulk`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          items: items.map((item) => ({
+            name: item.name,
+            category: item.category,
+            color: item.color ?? '',
+            formality: item.formality ?? 'casual',
+            seasonality: item.seasonality ?? 'all_season',
+            primary_image_url:
+              item.primaryImageUrl ?? 'https://example.com/garment-placeholder.jpg',
+          })),
+        }),
+      }
+    );
+    if (!Array.isArray(response)) return [];
+    return response.map(mapGarment);
+  } catch (error) {
+    // Backward compatibility for older backends that do not implement /items/bulk.
+    if (isApiError(error) && (error.status === 404 || error.status === 405)) {
+      const created: Garment[] = [];
+      for (const item of items) {
+        created.push(await addGarment(userId, item));
+      }
+      return created;
+    }
+    throw error;
+  }
 }
 
 export async function syncCalendarEvents(
