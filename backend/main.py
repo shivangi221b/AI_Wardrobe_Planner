@@ -22,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from vision.extractor import ExtractedGarmentAsset, extract_garments_from_image
 
 from .db import delete_garment, get_measurements, insert_garment, set_garment_hidden, upsert_measurements
+from .garment_search_filter import filter_and_rank_image_results
 from .models import (
     BodyMeasurements,
     GarmentCategory,
@@ -288,6 +289,12 @@ async def search_garment_images(user_id: str, request: SearchGarmentRequest) -> 
     Lightweight onboarding: user types e.g. "Zara black linen shirt" and picks an image.
 
     Uses SerpAPI Google Images search to fetch product-style photos.
+    One request by default (`num` = client limit). A second page (`ijn=1`) is fetched
+    when the post-filtered row count is below ``min(limit, max(2, (limit + 1) // 2))``
+    (about half the requested limit, never above ``limit``)—not only when the first
+    page is empty after filtering. Results from both pages are merged, deduped by
+    image URL, and re-filtered (at most 2 SerpAPI calls per wardrobe search).
+
     Env required:
       - SERPAPI_KEY
     """
@@ -319,46 +326,132 @@ async def search_garment_images(user_id: str, request: SearchGarmentRequest) -> 
     logger.info("Garment search start user_id=%s q=%r limit=%d", user_id, query, limit)
 
     url = "https://serpapi.com/search.json"
-    params = {
+    base_params = {
         "engine": "google_images",
         "q": query,
         "api_key": api_key,
         "num": str(limit),
     }
 
+    # Second SerpAPI page when post-filter keeps fewer than this many (min 2, capped by limit).
+    # Cap avoids limit=1 always requesting a second page (threshold 2 > max returnable 1).
+    backfill_threshold = min(limit, max(2, (limit + 1) // 2))
+
+    def _dedupe_image_dicts(pages: list[list]) -> list[dict]:
+        seen: set[str] = set()
+        out: list[dict] = []
+        for page in pages:
+            for it in page:
+                if not isinstance(it, dict):
+                    continue
+                link = it.get("original") or it.get("thumbnail")
+                if not isinstance(link, str) or not link.strip():
+                    continue
+                u = link.strip()
+                if u in seen:
+                    continue
+                seen.add(u)
+                out.append(it)
+        return out
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params)
-            raw = resp.text
-            if resp.status_code >= 400:
-                logger.error("Garment search failed status=%d body=%s", resp.status_code, raw[:500])
-                raise HTTPException(
-                    status_code=502,
-                    detail="Garment search provider failed. Check SERPAPI_KEY or try again later.",
-                )
-            data = resp.json()
+
+            async def _fetch_serpapi_page(ijn: int | None) -> list[dict]:
+                params = dict(base_params)
+                if ijn is not None:
+                    params["ijn"] = str(ijn)
+                resp = await client.get(url, params=params)
+                raw = resp.text
+                if resp.status_code >= 400:
+                    logger.error(
+                        "Garment search failed status=%d ijn=%s body=%s",
+                        resp.status_code,
+                        ijn,
+                        raw[:500],
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Garment search provider failed. Check SERPAPI_KEY or try again later.",
+                    )
+                data = resp.json()
+                items = data.get("images_results") if isinstance(data, dict) else []
+                if not isinstance(items, list):
+                    return []
+                return [it for it in items if isinstance(it, dict)]
+
+            page0 = await _fetch_serpapi_page(None)
+            raw_list = _dedupe_image_dicts([page0])
+
+            filtered = filter_and_rank_image_results(
+                raw_list,
+                base_query=base_query,
+                color=request.color,
+                material=request.material,
+                kind=request.kind,
+                limit=limit,
+            )
+
+            serp_calls = 1
+            # Backfill when too few images survive scoring (not only when the list is empty).
+            if len(filtered) < backfill_threshold:
+                try:
+                    page1 = await _fetch_serpapi_page(1)
+                    serp_calls = 2
+                    raw_list = _dedupe_image_dicts([page0, page1])
+                    filtered = filter_and_rank_image_results(
+                        raw_list,
+                        base_query=base_query,
+                        color=request.color,
+                        material=request.material,
+                        kind=request.kind,
+                        limit=limit,
+                    )
+                    logger.info(
+                        "Garment search backfill user_id=%s after_filter=%d threshold=%d raw_merged=%d",
+                        user_id,
+                        len(filtered),
+                        backfill_threshold,
+                        len(raw_list),
+                    )
+                except HTTPException as exc:
+                    logger.warning(
+                        "Garment search backfill HTTP error user_id=%s status=%s — using first page only",
+                        user_id,
+                        getattr(exc, "status_code", exc),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Garment search backfill page failed user_id=%s: %s — using first page only",
+                        user_id,
+                        exc,
+                    )
+
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("Garment search request error")
         raise HTTPException(status_code=502, detail="Garment search request failed. Please retry.") from exc
 
-    items = data.get("images_results") if isinstance(data, dict) else []
     results: List[SearchGarmentResult] = []
-    if isinstance(items, list):
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            link = item.get("original") or item.get("thumbnail")
-            if not isinstance(link, str) or not link.strip():
-                continue
-            results.append(SearchGarmentResult(
-                image_url=link.strip(),
-                title=item.get("title") if isinstance(item.get("title"), str) else None,
-                source_url=item.get("link") if isinstance(item.get("link"), str) else None,
-            ))
+    for item in filtered:
+        link = item.get("original") or item.get("thumbnail")
+        if not isinstance(link, str) or not link.strip():
+            continue
+        results.append(SearchGarmentResult(
+            image_url=link.strip(),
+            title=item.get("title") if isinstance(item.get("title"), str) else None,
+            source_url=item.get("link") if isinstance(item.get("link"), str) else None,
+        ))
 
-    logger.info("Garment search complete user_id=%s results=%d", user_id, len(results))
+    logger.info(
+        "Garment search complete user_id=%s serp_calls=%d raw=%d filtered=%d returned=%d",
+        user_id,
+        serp_calls,
+        len(raw_list),
+        len(filtered),
+        len(results),
+    )
     return results
 
 
