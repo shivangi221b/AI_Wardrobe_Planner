@@ -258,19 +258,24 @@ def _tokenize(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) >= _MIN_TOKEN_LEN}
 
 
-def _token_appears_in_text(token: str, text: str) -> bool:
+def _token_appears_in_lower_text(token: str, hay_lower: str) -> bool:
     """
-    Match token in text without substring traps (e.g. "top" in "laptop", "car" in "scarf").
-    Short tokens use word-boundary style checks; longer tokens use substring.
+    Match token in *hay_lower* (must already be lowercased) without substring traps
+    (e.g. "top" in "laptop", "car" in "scarf"). Short tokens use word-boundary style
+    checks; longer tokens use substring.
     """
     t = token.lower()
-    hay = text.lower()
     if len(t) <= 5:
         try:
-            return bool(re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", hay))
+            return bool(re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", hay_lower))
         except re.error:
-            return t in hay
-    return t in hay
+            return t in hay_lower
+    return t in hay_lower
+
+
+def _token_appears_in_text(token: str, text: str) -> bool:
+    """Like ``_token_appears_in_lower_text`` but lowercases *text* once (arbitrary case)."""
+    return _token_appears_in_lower_text(token, text.lower())
 
 
 def _fashion_tokens_from_search(
@@ -304,12 +309,12 @@ def _score_image_result(item: dict[str, Any], required_tokens: set[str]) -> floa
     score = 0.0
 
     for w in _NEGATIVE_WORDS:
-        if _token_appears_in_text(w, blob):
+        if _token_appears_in_lower_text(w, blob):
             score -= 4.0
 
     matched_required = 0
     for t in required_tokens:
-        if _token_appears_in_text(t, blob):
+        if _token_appears_in_lower_text(t, blob):
             score += 3.0
             matched_required += 1
 
@@ -317,7 +322,7 @@ def _score_image_result(item: dict[str, Any], required_tokens: set[str]) -> floa
     if required_tokens and matched_required == 0:
         score -= 2.0
 
-    hint_hits = sum(1 for h in _APPAREL_HINTS if _token_appears_in_text(h, blob))
+    hint_hits = sum(1 for h in _APPAREL_HINTS if _token_appears_in_lower_text(h, blob))
     if hint_hits:
         score += min(2.0, 0.4 * hint_hits)
 

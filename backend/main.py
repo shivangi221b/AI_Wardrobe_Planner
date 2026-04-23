@@ -280,9 +280,11 @@ async def search_garment_images(user_id: str, request: SearchGarmentRequest) -> 
     Lightweight onboarding: user types e.g. "Zara black linen shirt" and picks an image.
 
     Uses SerpAPI Google Images search to fetch product-style photos.
-    One request by default (`num` = client limit). If post-filter keeps fewer than
-    ``min(limit, max(2, (limit + 1) // 2))`` rows, a second page is fetched (`ijn=1`),
-    merged, deduped, and re-filtered (at most 2 SerpAPI calls per wardrobe search).
+    One request by default (`num` = client limit). A second page (`ijn=1`) is fetched
+    when the post-filtered row count is below ``min(limit, max(2, (limit + 1) // 2))``
+    (about half the requested limit, never above ``limit``)—not only when the first
+    page is empty after filtering. Results from both pages are merged, deduped by
+    image URL, and re-filtered (at most 2 SerpAPI calls per wardrobe search).
 
     Env required:
       - SERPAPI_KEY
@@ -382,6 +384,7 @@ async def search_garment_images(user_id: str, request: SearchGarmentRequest) -> 
             )
 
             serp_calls = 1
+            # Backfill when too few images survive scoring (not only when the list is empty).
             if len(filtered) < backfill_threshold:
                 try:
                     page1 = await _fetch_serpapi_page(1)
