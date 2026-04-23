@@ -24,6 +24,8 @@ export interface Garment {
   pattern?: string | null;
   material?: string | null;
   fitNotes?: string | null;
+  brand?: string | null;
+  size?: string | null;
   gender?: GarmentGender | null;
   timesRecommended?: number;
   hiddenFromRecommendations?: boolean;

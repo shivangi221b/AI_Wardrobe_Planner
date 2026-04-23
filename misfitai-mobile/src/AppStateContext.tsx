@@ -69,6 +69,10 @@ interface AppState {
       color?: string;
       formality?: GarmentFormality;
       seasonality?: GarmentSeasonality;
+      brand?: string;
+      size?: string;
+      fitNotes?: string;
+      price?: number;
     }
   ) => Promise<void>;
   addGarmentViaVision: (payload: VisionAddPayload) => Promise<void>;
@@ -309,6 +313,10 @@ export function AppStateProvider({
     color?: string;
     formality?: GarmentFormality;
     seasonality?: GarmentSeasonality;
+    brand?: string;
+    size?: string;
+    fitNotes?: string;
+    price?: number;
   }): Promise<void> => {
     const created = await addGarment(userId, payload);
     setGarments((current) => {
