@@ -89,6 +89,7 @@ async def recommend_week(
         user_gender=request.user_gender,
         measurements=measurements,
         user_profile=user_profile,
+        include_laundry=request.include_laundry,
     )
 
     # Increment usage counters for recommended garments (best-effort).

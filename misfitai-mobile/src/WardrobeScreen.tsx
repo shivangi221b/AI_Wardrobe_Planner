@@ -62,6 +62,8 @@ export function WardrobeScreen({
     addGarmentViaSearch,
     searchGarmentCandidates,
     deleteGarmentFromWardrobe,
+    logWearEvent,
+    setGarmentLaundryStatus,
   } = useAppState();
 
   const [name, setName] = useState('');
@@ -983,8 +985,13 @@ export function WardrobeScreen({
               .filter((garment) =>
                 wardrobeFilter === 'all' ? true : garment.category === wardrobeFilter
               )
-              .map((garment) => (
-                <View key={garment.id} style={styles.card}>
+              .map((garment) => {
+                const isInLaundry = garment.laundryStatus === 'in_laundry';
+                return (
+                <View
+                  key={garment.id}
+                  style={[styles.card, isInLaundry && styles.cardInLaundry]}
+                >
                   <Pressable
                     onPress={() => {
                       if (garment.primaryImageUrl) {
@@ -1002,9 +1009,14 @@ export function WardrobeScreen({
                               ? shoesImage
                               : getImageForGarment(garment.name, 'top')
                       }
-                      style={styles.cardImage}
+                      style={[styles.cardImage, isInLaundry && styles.cardImageDimmed]}
                       resizeMode="contain"
                     />
+                    {isInLaundry ? (
+                      <View style={styles.laundryBadge}>
+                        <Text style={styles.laundryBadgeText}>🧺</Text>
+                      </View>
+                    ) : null}
                   </Pressable>
                   <View style={styles.cardBody}>
                     <Text style={styles.cardTitle}>{garment.name}</Text>
@@ -1028,6 +1040,45 @@ export function WardrobeScreen({
                         </Text>
                       );
                     })()}
+                    <Text style={styles.cardMeta}>
+                      Worn {garment.timesWorn ?? 0}×
+                      {garment.lastWornDate ? ` · Last ${garment.lastWornDate}` : ' · Never worn'}
+                    </Text>
+                    <View style={styles.cardActions}>
+                      <Pressable
+                        onPress={() => logWearEvent(garment.id)}
+                        style={styles.cardActionBtn}
+                        hitSlop={4}
+                        accessibilityLabel="Mark this item as worn today to track usage"
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.cardActionBtnText}>I wore this</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() =>
+                          setGarmentLaundryStatus(
+                            garment.id,
+                            isInLaundry ? 'clean' : 'in_laundry',
+                          )
+                        }
+                        style={[
+                          styles.cardActionBtn,
+                          isInLaundry && styles.cardActionBtnActive,
+                        ]}
+                        hitSlop={4}
+                        accessibilityLabel={isInLaundry ? 'Mark as clean' : 'Mark as in laundry'}
+                        accessibilityRole="button"
+                      >
+                        <Text
+                          style={[
+                            styles.cardActionBtnText,
+                            isInLaundry && styles.cardActionBtnTextActive,
+                          ]}
+                        >
+                          {isInLaundry ? 'Mark clean' : 'In laundry'}
+                        </Text>
+                      </Pressable>
+                    </View>
                   </View>
                   <Pressable
                     onPress={() => handleDeletePress(garment)}
@@ -1039,7 +1090,8 @@ export function WardrobeScreen({
                     <Text style={styles.cardDeleteBtnText}>×</Text>
                   </Pressable>
                 </View>
-              ))}
+                );
+              })}
 
             {!isLoadingWardrobe && garments.length === 0 ? (
               <Text style={styles.helperText}>
@@ -1243,6 +1295,54 @@ const styles = StyleSheet.create({
     color: palette.muted,
     fontSize: 12,
     fontFamily: type.body,
+  },
+  cardInLaundry: {
+    opacity: 0.65,
+    borderColor: palette.lineStrong,
+    borderStyle: 'dashed' as const,
+  },
+  cardImageDimmed: {
+    opacity: 0.5,
+  },
+  laundryBadge: {
+    position: 'absolute' as const,
+    bottom: -2,
+    right: -2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: palette.panelStrong,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  laundryBadgeText: {
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  cardActions: {
+    flexDirection: 'row' as const,
+    gap: 6,
+    marginTop: 6,
+  },
+  cardActionBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.line,
+    backgroundColor: palette.panel,
+  },
+  cardActionBtnActive: {
+    backgroundColor: palette.accent,
+    borderColor: palette.accent,
+  },
+  cardActionBtnText: {
+    fontSize: 11,
+    fontFamily: type.bodyMedium,
+    color: palette.muted,
+  },
+  cardActionBtnTextActive: {
+    color: palette.textOnAccent,
   },
   formCard: {
     marginTop: 8,

@@ -7,6 +7,8 @@ import { WardrobeScreen } from './src/WardrobeScreen';
 import { EventsScreen } from './src/EventsScreen';
 import { WeeklyPlanScreen } from './src/WeeklyPlanScreen';
 import { ProfileScreen } from './src/ProfileScreen';
+import { WearHistoryScreen } from './src/WearHistoryScreen';
+import { dayOrder } from './src/constants';
 import { registerSignupWithBackend, updateUserProfile, USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
@@ -39,7 +41,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 
 const SESSION_STORAGE_KEY = '@misfitai/session';
 
-type Tab = 'wardrobe' | 'events' | 'plan' | 'profile';
+type Tab = 'wardrobe' | 'events' | 'plan' | 'history' | 'profile';
 
 type Session = {
   provider: AuthProvider;
@@ -124,7 +126,8 @@ function AppContent({
   const demoWeekSelected = (
     Object.keys(DEMO_WEEK_EVENTS) as Array<keyof typeof DEMO_WEEK_EVENTS>
   ).every((day) => eventsByDay[day] === DEMO_WEEK_EVENTS[day]);
-  const calendarStepComplete = isCalendarConnected || demoWeekSelected;
+  const hasAnyEvent = dayOrder.some((day) => eventsByDay[day] !== 'none');
+  const calendarStepComplete = isCalendarConnected || demoWeekSelected || hasAnyEvent;
   const outfitsStepComplete = recommendations.length > 0;
 
   const flowSteps: Array<{
@@ -139,7 +142,7 @@ function AppContent({
 
   const handleTabChange = (nextTab: Tab) => {
     setTab(nextTab);
-    if (nextTab === 'profile') {
+    if (nextTab === 'profile' || nextTab === 'history') {
       setTabHint(null);
       return;
     }
@@ -163,7 +166,7 @@ function AppContent({
       <StatusBar style="dark" />
       <AtmosphereBackground />
 
-      <View style={[styles.topChrome, tab === 'profile' && styles.topChromeCompact]}>
+      <View style={[styles.topChrome, (tab === 'profile' || tab === 'history') && styles.topChromeCompact]}>
         <View style={styles.metaBar}>
           <View style={styles.metaChip}>
             <Text style={styles.metaChipText}>
@@ -177,7 +180,7 @@ function AppContent({
           </Pressable>
         </View>
 
-        {tab !== 'profile' ? <View style={styles.stepperCard}>
+        {tab !== 'profile' && tab !== 'history' ? <View style={styles.stepperCard}>
           {flowSteps.map((item, index) => {
             const active = tab === item.key;
             return (
@@ -208,7 +211,7 @@ function AppContent({
           })}
         </View> : null}
 
-        {tab !== 'profile' ? <View style={styles.breadcrumbRow}>
+        {tab !== 'profile' && tab !== 'history' ? <View style={styles.breadcrumbRow}>
           {flowSteps.map((item, index) => {
             const active = tab === item.key;
             return (
@@ -230,7 +233,7 @@ function AppContent({
           })}
         </View> : null}
 
-        {tab !== 'profile' && tabHint ? <Text style={styles.stepHint}>{tabHint}</Text> : null}
+        {tab !== 'profile' && tab !== 'history' && tabHint ? <Text style={styles.stepHint}>{tabHint}</Text> : null}
       </View>
 
       <View style={styles.content}>
@@ -257,13 +260,15 @@ function AppContent({
 
         {tab === 'plan' ? (
           <WeeklyPlanScreen
-            onRegenerateWeek={async () => {
-              await generateRecommendations();
+            onRegenerateWeek={async (includeLaundry?: boolean) => {
+              await generateRecommendations(includeLaundry);
             }}
             onBackToCalendar={() => handleTabChange('events')}
             onNavigateToWardrobe={() => handleTabChange('wardrobe')}
           />
         ) : null}
+
+        {tab === 'history' ? <WearHistoryScreen /> : null}
 
         {tab === 'profile' ? (
           <ProfileScreen
@@ -277,7 +282,8 @@ function AppContent({
         {([
           { key: 'wardrobe', label: 'Wardrobe' },
           { key: 'events', label: 'Calendar' },
-          { key: 'plan', label: 'Outfits' },
+          { key: 'plan', label: 'Weekly Recs' },
+          { key: 'history', label: 'History' },
           { key: 'profile', label: 'Profile' },
         ] as const).map((item) => {
           const active = tab === item.key;

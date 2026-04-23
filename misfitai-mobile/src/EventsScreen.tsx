@@ -88,12 +88,12 @@ export function EventsScreen({
   );
 
   const canGenerateFromWardrobe = wardrobeStepComplete || (hasTops && hasBottoms) || hasDresses;
-  const canGenerate = canGenerateFromWardrobe && calendarStepComplete && !generating;
+  const canGenerate = calendarStepComplete && !generating;
 
-  const blockerText = !canGenerateFromWardrobe
-    ? 'Back to Wardrobe and add at least one top and one bottom, or a dress.'
-    : !calendarStepComplete
-      ? 'Connect your calendar or tap Use demo week to continue.'
+  const blockerText = !calendarStepComplete
+    ? 'Connect your calendar or tap Use demo week to continue.'
+    : !canGenerateFromWardrobe
+      ? 'Your wardrobe is empty — results will be limited. Add items for better outfits.'
       : null;
 
   useEffect(() => {

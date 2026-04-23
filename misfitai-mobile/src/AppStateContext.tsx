@@ -15,6 +15,7 @@ import type {
   Garment,
   GarmentSeasonality,
   GarmentFormality,
+  LaundryStatus,
 } from './types';
 import { dayOrder } from './constants';
 import {
@@ -33,6 +34,9 @@ import {
   deleteGarment as apiDeleteGarment,
   setGarmentHidden as apiSetGarmentHidden,
   syncCalendarEvents as apiSyncCalendarEvents,
+  logWear as apiLogWear,
+  setLaundryStatus as apiSetLaundryStatus,
+  logOutfit as apiLogOutfit,
   type ConfirmSearchAddPayload,
   type GarmentSearchResult,
   type GarmentSearchOptions,
@@ -60,7 +64,7 @@ interface AppState {
   setEventForDay: (day: DayOfWeek, eventType: EventType) => void;
   useDemoWeek: () => void;
   syncCalendarEvents: () => Promise<void>;
-  generateRecommendations: () => Promise<void>;
+  generateRecommendations: (includeLaundry?: boolean) => Promise<void>;
   addGarmentToWardrobe: (
     payload: {
       name: string;
@@ -77,6 +81,12 @@ interface AppState {
   toggleGarmentHidden: (garmentId: string, hidden: boolean) => Promise<void>;
   deleteGarmentFromWardrobe: (garmentId: string) => Promise<void>;
   updateMeasurements: (data: Omit<BodyMeasurements, 'userId' | 'updatedAt'>) => Promise<void>;
+  logWearEvent: (garmentId: string, wornDate?: string) => Promise<void>;
+  setGarmentLaundryStatus: (garmentId: string, status: LaundryStatus) => Promise<void>;
+  logOutfitEntry: (wornDate: string, garmentIds: string[], eventType?: string | null, notes?: string | null) => Promise<void>;
+  /** Tag as worn on Weekly Recs, per weekday tab — survives switching tabs (screen unmounts). */
+  weeklyRecsTaggedIdsByDay: Partial<Record<DayOfWeek, string[]>>;
+  markWeeklyRecsItemWorn: (day: DayOfWeek, garmentId: string) => void;
 }
 
 const AppStateContext = createContext<AppState | undefined>(undefined);
@@ -136,6 +146,9 @@ export function AppStateProvider({
   const [recommendations, setRecommendations] = useState<
     DayRecommendation[]
   >([]);
+  const [weeklyRecsTaggedIdsByDay, setWeeklyRecsTaggedIdsByDay] = useState<
+    Partial<Record<DayOfWeek, string[]>>
+  >({});
   const [isLoadingWardrobe, setIsLoadingWardrobe] = useState(false);
   const [wardrobeError, setWardrobeError] = useState<string | null>(null);
   const [measurements, setMeasurements] = useState<BodyMeasurements | null>(null);
@@ -287,20 +300,29 @@ export function AppStateProvider({
     }
   }, [userId, googleAccessToken]);
 
-  const generateRecommendations = useCallback(async () => {
+  const generateRecommendations = useCallback(async (includeLaundry?: boolean) => {
     const events: CalendarEvent[] = dayOrder.map((day, index) => ({
       id: 'event-' + index,
       day,
       eventType: eventsByDay[day],
     }));
     await saveWeekEvents(userId, events);
-    const response = await getWeeklyRecommendations(userId, events, userGender);
+    const response = await getWeeklyRecommendations(userId, events, userGender, includeLaundry);
     setRecommendations(
       response.recommendations.sort(
         (a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day)
       )
     );
+    setWeeklyRecsTaggedIdsByDay({});
   }, [userId, eventsByDay, userGender]);
+
+  const markWeeklyRecsItemWorn = useCallback((day: DayOfWeek, garmentId: string) => {
+    setWeeklyRecsTaggedIdsByDay((prev) => {
+      const list = prev[day] ?? [];
+      if (list.includes(garmentId)) return prev;
+      return { ...prev, [day]: [...list, garmentId] };
+    });
+  }, []);
 
   const addGarmentToWardrobe = useCallback(async (payload: {
     name: string;
@@ -396,6 +418,47 @@ export function AppStateProvider({
     [userId]
   );
 
+  const logWearEvent = useCallback(
+    async (garmentId: string, wornDate?: string): Promise<void> => {
+      const dateStr = wornDate ?? new Date().toISOString().slice(0, 10);
+      await apiLogWear(userId, garmentId, dateStr);
+      setGarments((current) =>
+        current.map((g) =>
+          g.id === garmentId
+            ? {
+                ...g,
+                timesWorn: (g.timesWorn ?? 0) + 1,
+                lastWornDate: dateStr,
+              }
+            : g,
+        ),
+      );
+    },
+    [userId],
+  );
+
+  const setGarmentLaundryStatus = useCallback(
+    async (garmentId: string, status: LaundryStatus): Promise<void> => {
+      const updated = await apiSetLaundryStatus(userId, garmentId, status);
+      setGarments((current) =>
+        current.map((g) => (g.id === updated.id ? updated : g)),
+      );
+    },
+    [userId],
+  );
+
+  const logOutfitEntry = useCallback(
+    async (
+      wornDate: string,
+      garmentIds: string[],
+      eventType?: string | null,
+      notes?: string | null,
+    ): Promise<void> => {
+      await apiLogOutfit(userId, wornDate, garmentIds, eventType, notes);
+    },
+    [userId],
+  );
+
   const value: AppState = useMemo(
     () => ({
       userId,
@@ -421,6 +484,11 @@ export function AppStateProvider({
       toggleGarmentHidden,
       deleteGarmentFromWardrobe,
       updateMeasurements,
+      logWearEvent,
+      setGarmentLaundryStatus,
+      logOutfitEntry,
+      weeklyRecsTaggedIdsByDay,
+      markWeeklyRecsItemWorn,
     }),
     [
       userId,
@@ -446,6 +514,11 @@ export function AppStateProvider({
       toggleGarmentHidden,
       deleteGarmentFromWardrobe,
       updateMeasurements,
+      logWearEvent,
+      setGarmentLaundryStatus,
+      logOutfitEntry,
+      weeklyRecsTaggedIdsByDay,
+      markWeeklyRecsItemWorn,
     ]
   );
 

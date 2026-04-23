@@ -60,6 +60,7 @@ def _gemini_client() -> Optional[genai.Client]:
 _http_client = httpx.AsyncClient(
     timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
     limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+    trust_env=False,
 )
 
 # ---------------------------------------------------------------------------

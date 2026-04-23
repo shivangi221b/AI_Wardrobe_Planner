@@ -11,9 +11,13 @@ import type {
   GarmentCategory,
   GarmentFormality,
   GarmentGender,
+  GarmentInsights,
   GarmentSeasonality,
+  LaundryStatus,
+  OutfitLogEntry,
   UserProfile,
   UserProfileUpdate,
+  WearLogEntry,
 } from './types';
 
 const DEFAULT_API_BASE_URL =
@@ -178,6 +182,9 @@ interface WardrobeApiItem {
   times_recommended?: number | null;
   hidden_from_recommendations?: boolean | null;
   tags?: string[] | null;
+  laundry_status?: string | null;
+  last_worn_date?: string | null;
+  times_worn?: number | null;
 }
 
 interface WeekEventApi {
@@ -355,6 +362,11 @@ function deriveGarmentName(item: WardrobeApiItem): string {
   return titleCase(subject);
 }
 
+function normalizeLaundryStatus(value?: string | null): LaundryStatus {
+  if (value === 'in_laundry') return 'in_laundry';
+  return 'clean';
+}
+
 function mapGarment(item: WardrobeApiItem): Garment {
   return {
     id: item.id,
@@ -372,6 +384,9 @@ function mapGarment(item: WardrobeApiItem): Garment {
     timesRecommended: item.times_recommended ?? 0,
     hiddenFromRecommendations: item.hidden_from_recommendations ?? false,
     tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
+    laundryStatus: normalizeLaundryStatus(item.laundry_status),
+    lastWornDate: item.last_worn_date ?? null,
+    timesWorn: item.times_worn ?? 0,
   };
 }
 
@@ -966,6 +981,7 @@ export async function getWeeklyRecommendations(
   userId: string,
   events: CalendarEvent[],
   userGender?: string | null,
+  includeLaundry?: boolean,
 ): Promise<{ recommendations: DayRecommendation[] }> {
   if (USE_MOCK_API) {
     return mockGetWeeklyRecommendations(userId, events);
@@ -978,6 +994,7 @@ export async function getWeeklyRecommendations(
     body: JSON.stringify({
       user_id: userId,
       user_gender: userGender ?? undefined,
+      include_laundry: includeLaundry ?? false,
       events: events.map((event) => ({
         day: event.day,
         event_type: eventTypeForApi(event.eventType),
@@ -1231,5 +1248,209 @@ export async function syncCalendarEvents(
     events: responseEvents.map((event, index) =>
       mapWeekEvent(event, dayOrder[index] ?? 'monday')
     ),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Wear tracking & laundry status
+// ---------------------------------------------------------------------------
+
+interface WearLogApiItem {
+  id: string;
+  user_id: string;
+  garment_id: string;
+  worn_date: string;
+  created_at?: string;
+}
+
+interface OutfitLogApiItem {
+  id: string;
+  user_id: string;
+  worn_date: string;
+  garment_ids?: string[];
+  event_type?: string | null;
+  notes?: string | null;
+  created_at?: string;
+}
+
+interface InsightsApiResponse {
+  most_worn: { garment_id: string; times_worn: number }[];
+  not_worn_recently: string[];
+  total_items: number;
+  total_wears: number;
+}
+
+function mapWearLogEntry(item: WearLogApiItem): WearLogEntry {
+  return {
+    id: item.id,
+    garmentId: item.garment_id,
+    wornDate: item.worn_date,
+    createdAt: item.created_at,
+  };
+}
+
+function mapOutfitLogEntry(item: OutfitLogApiItem): OutfitLogEntry {
+  return {
+    id: item.id,
+    wornDate: item.worn_date,
+    garmentIds: item.garment_ids ?? [],
+    eventType: item.event_type ?? null,
+    notes: item.notes ?? null,
+    createdAt: item.created_at,
+  };
+}
+
+const mockWearLog: Record<string, WearLogEntry[]> = {};
+const mockOutfitLog: Record<string, OutfitLogEntry[]> = {};
+let mockWearCounter = 1000;
+
+export async function logWear(
+  userId: string,
+  garmentId: string,
+  wornDate?: string,
+): Promise<WearLogEntry> {
+  const dateStr = wornDate ?? new Date().toISOString().slice(0, 10);
+  if (USE_MOCK_API) {
+    const entry: WearLogEntry = {
+      id: `mock-wear-${mockWearCounter++}`,
+      garmentId,
+      wornDate: dateStr,
+      createdAt: new Date().toISOString(),
+    };
+    if (!mockWearLog[userId]) mockWearLog[userId] = [];
+    mockWearLog[userId].push(entry);
+    const wardrobe = getOrCreateMockWardrobe(userId);
+    const g = wardrobe.find((item) => item.id === garmentId);
+    if (g) {
+      g.timesWorn = (g.timesWorn ?? 0) + 1;
+      g.lastWornDate = dateStr;
+    }
+    return entry;
+  }
+  const response = await requestJson<WearLogApiItem>(
+    `/wardrobe/${encodeURIComponent(userId)}/${encodeURIComponent(garmentId)}/wear`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ worn_date: dateStr }),
+    },
+  );
+  return mapWearLogEntry(response);
+}
+
+export async function setLaundryStatus(
+  userId: string,
+  garmentId: string,
+  status: LaundryStatus,
+): Promise<Garment> {
+  if (USE_MOCK_API) {
+    const wardrobe = getOrCreateMockWardrobe(userId);
+    const item = wardrobe.find((g) => g.id === garmentId);
+    if (item) {
+      item.laundryStatus = status;
+    }
+    return item ?? { id: garmentId, name: '', category: 'top', color: '', formality: 'casual' };
+  }
+  const response = await requestJson<WardrobeApiItem>(
+    `/wardrobe/${encodeURIComponent(userId)}/${encodeURIComponent(garmentId)}/laundry`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    },
+  );
+  return mapGarment(response);
+}
+
+export async function getWearHistory(
+  userId: string,
+  startDate?: string,
+  endDate?: string,
+): Promise<WearLogEntry[]> {
+  if (USE_MOCK_API) {
+    let entries = mockWearLog[userId] ?? [];
+    if (startDate) entries = entries.filter((e) => e.wornDate >= startDate);
+    if (endDate) entries = entries.filter((e) => e.wornDate <= endDate);
+    return entries.sort((a, b) => b.wornDate.localeCompare(a.wornDate));
+  }
+  const params = new URLSearchParams();
+  if (startDate) params.set('start', startDate);
+  if (endDate) params.set('end', endDate);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const response = await requestJson<WearLogApiItem[]>(
+    `/users/${encodeURIComponent(userId)}/wear-history${qs}`,
+  );
+  return Array.isArray(response) ? response.map(mapWearLogEntry) : [];
+}
+
+export async function getOutfitLog(
+  userId: string,
+  startDate?: string,
+  endDate?: string,
+): Promise<OutfitLogEntry[]> {
+  if (USE_MOCK_API) {
+    let entries = mockOutfitLog[userId] ?? [];
+    if (startDate) entries = entries.filter((e) => e.wornDate >= startDate);
+    if (endDate) entries = entries.filter((e) => e.wornDate <= endDate);
+    return entries.sort((a, b) => b.wornDate.localeCompare(a.wornDate));
+  }
+  const params = new URLSearchParams();
+  if (startDate) params.set('start', startDate);
+  if (endDate) params.set('end', endDate);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const response = await requestJson<OutfitLogApiItem[]>(
+    `/users/${encodeURIComponent(userId)}/outfit-log${qs}`,
+  );
+  return Array.isArray(response) ? response.map(mapOutfitLogEntry) : [];
+}
+
+export async function logOutfit(
+  userId: string,
+  wornDate: string,
+  garmentIds: string[],
+  eventType?: string | null,
+  notes?: string | null,
+): Promise<OutfitLogEntry> {
+  if (USE_MOCK_API) {
+    const entry: OutfitLogEntry = {
+      id: `mock-outfit-${mockWearCounter++}`,
+      wornDate,
+      garmentIds,
+      eventType: eventType ?? null,
+      notes: notes ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    if (!mockOutfitLog[userId]) mockOutfitLog[userId] = [];
+    mockOutfitLog[userId].push(entry);
+    return entry;
+  }
+  const response = await requestJson<OutfitLogApiItem>(
+    `/users/${encodeURIComponent(userId)}/outfit-log`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        worn_date: wornDate,
+        garment_ids: garmentIds,
+        event_type: eventType ?? undefined,
+        notes: notes ?? undefined,
+      }),
+    },
+  );
+  return mapOutfitLogEntry(response);
+}
+
+export async function getWardrobeInsights(userId: string): Promise<GarmentInsights> {
+  if (USE_MOCK_API) {
+    return { mostWorn: [], notWornRecently: [], totalItems: 0, totalWears: 0 };
+  }
+  const response = await requestJson<InsightsApiResponse>(
+    `/users/${encodeURIComponent(userId)}/wardrobe-insights`,
+  );
+  return {
+    mostWorn: (response.most_worn ?? []).map((m) => ({
+      garmentId: m.garment_id,
+      timesWorn: m.times_worn,
+    })),
+    notWornRecently: response.not_worn_recently ?? [],
+    totalItems: response.total_items ?? 0,
+    totalWears: response.total_wears ?? 0,
   };
 }
