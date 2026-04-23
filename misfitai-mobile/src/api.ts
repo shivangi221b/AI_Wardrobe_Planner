@@ -1137,13 +1137,15 @@ export function profileUpdateToApiPayload(data: UserProfileUpdate): Record<strin
       payload.avatar_config = null;
     } else {
       const av: AvatarConfig = data.avatarConfig;
-      payload.avatar_config = {
-        hair_style: av.hairStyle ?? null,
-        hair_color: av.hairColor ?? null,
-        body_type: av.bodyType ?? null,
-        skin_tone: av.skinTone ?? null,
-        avatar_image_url: av.avatarImageUrl ?? null,
-      };
+      const cfg: Record<string, unknown> = {};
+      if (av.hairStyle !== undefined) cfg.hair_style = av.hairStyle;
+      if (av.hairColor !== undefined) cfg.hair_color = av.hairColor;
+      if (av.bodyType !== undefined) cfg.body_type = av.bodyType;
+      if (av.skinTone !== undefined) cfg.skin_tone = av.skinTone;
+      if (av.avatarImageUrl !== undefined) cfg.avatar_image_url = av.avatarImageUrl;
+      if (Object.keys(cfg).length > 0) {
+        payload.avatar_config = cfg;
+      }
     }
   }
   return payload;
@@ -1182,9 +1184,14 @@ export async function updateUserProfile(
  *
  * @param userId   Authenticated user id.
  * @param selfieUri  Local file:// URI returned by expo-image-picker.
+ * @param pickerAsset Optional metadata from ``ImagePicker`` (native) so multipart name/type match real bytes.
  * @returns        The public URL of the generated avatar image.
  */
-export async function generateAvatar(userId: string, selfieUri: string): Promise<string> {
+export async function generateAvatar(
+  userId: string,
+  selfieUri: string,
+  pickerAsset?: { mimeType?: string | null; fileName?: string | null; type?: string | null }
+): Promise<string> {
   if (USE_MOCK_API) {
     // Return a deterministic placeholder so the UI can render something.
     return `https://ui-avatars.com/api/?name=${encodeURIComponent(userId)}&size=512&background=1b1b19&color=f4f4f2&rounded=true`;
@@ -1204,11 +1211,27 @@ export async function generateAvatar(userId: string, selfieUri: string): Promise
           : 'selfie.jpg';
     formData.append('selfie', blob, name);
   } else {
-    // React Native FormData accepts an object with uri, name, type.
+    const mimeRaw =
+      (pickerAsset?.mimeType || pickerAsset?.type || '').toLowerCase() || 'image/jpeg';
+    let type = 'image/jpeg';
+    let name = pickerAsset?.fileName?.trim() || 'selfie.jpg';
+    if (mimeRaw.includes('png')) {
+      type = 'image/png';
+      if (!name.toLowerCase().endsWith('.png')) name = 'selfie.png';
+    } else if (mimeRaw.includes('webp')) {
+      type = 'image/webp';
+      if (!name.toLowerCase().endsWith('.webp')) name = 'selfie.webp';
+    } else if (mimeRaw.includes('heic') || mimeRaw.includes('heif')) {
+      type = 'image/heic';
+      if (!/\.hei[c|f]$/i.test(name)) name = 'selfie.heic';
+    } else if (mimeRaw.includes('jpeg') || mimeRaw.includes('jpg')) {
+      type = 'image/jpeg';
+      if (!/\.jpe?g$/i.test(name)) name = 'selfie.jpg';
+    }
     formData.append('selfie', {
       uri: selfieUri,
-      name: 'selfie.jpg',
-      type: 'image/jpeg',
+      name,
+      type,
     } as unknown as Blob);
   }
 

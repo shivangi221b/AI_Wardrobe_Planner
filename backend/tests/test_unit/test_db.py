@@ -334,6 +334,9 @@ class TestLocalStoreUserProfile:
         assert p is not None
         assert p.avatar_config is not None
         assert p.avatar_config.hair_style == "curly_afro"
+        assert p.avatar_config.hair_color == "auburn"
+        assert p.avatar_config.body_type == "average"
+        assert p.avatar_config.skin_tone == "dark"
         assert p.avatar_config.avatar_image_url == "https://example.com/av.jpg"
 
     def test_avatar_config_none_clears(self):

@@ -328,7 +328,12 @@ async def generate_avatar_image(
     # Step 2 — build Imagen prompt
     prompt = _build_avatar_prompt(facial_description, avatar_config, color_tone, gender=gender)
     logger.info("avatar_gen: prompt length=%d gender=%r", len(prompt), gender)
-    logger.info("avatar_gen: prompt preview: %s", prompt[:480] + ("…" if len(prompt) > 480 else ""))
+    # Never log prompt text by default — it embeds the user's selfie-derived facial description (PII).
+    if os.getenv("AVATAR_LOG_PROMPT_PREVIEW", "").strip().lower() in ("1", "true", "yes"):
+        logger.info(
+            "avatar_gen: prompt preview (AVATAR_LOG_PROMPT_PREVIEW enabled): %s",
+            prompt[:480] + ("…" if len(prompt) > 480 else ""),
+        )
 
     # Step 3 — generate image (avatars use their own provider selection; see generate_avatar_portrait_image)
     from vision.image_gen import generate_avatar_portrait_image  # local import to avoid circular

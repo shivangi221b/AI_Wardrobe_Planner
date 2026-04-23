@@ -9,10 +9,12 @@ POST /users/{user_id}/avatar/generate
 
 from __future__ import annotations
 
+import io
 import logging
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
+from PIL import Image
 
 from ..avatar_gen import generate_avatar_image
 from ..db import get_user_profile, store_avatar_image, upsert_user_profile
@@ -22,14 +24,46 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["avatar"])
 
-_ALLOWED_MIME_TYPES = frozenset(
+_ALLOWED_TRUSTED_MIME = frozenset(
     {"image/jpeg", "image/jpg", "image/png", "image/heic", "image/heif", "image/webp"}
 )
 _MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
 
+# Pillow ``Image.format`` → canonical MIME (validated against _ALLOWED_TRUSTED_MIME).
+_PIL_FORMAT_TO_MIME: dict[str, str] = {
+    "JPEG": "image/jpeg",
+    "MPO": "image/jpeg",
+    "PNG": "image/png",
+    "WEBP": "image/webp",
+    "HEIF": "image/heic",
+    "HEIC": "image/heic",
+}
+
 
 class AvatarGenerateResponse(BaseModel):
     avatar_image_url: str
+
+
+def _trusted_mime_from_image_bytes(data: bytes) -> str:
+    """
+    Decode *data* with Pillow and return a MIME type derived from the actual
+    payload — do not trust the client ``Content-Type`` header.
+    """
+    if not data:
+        raise ValueError("Selfie file is empty.")
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.load()
+            fmt = (im.format or "").upper()
+    except Exception as exc:
+        raise ValueError("Could not decode image bytes; upload a valid JPEG, PNG, WebP, or HEIC.") from exc
+
+    mime = _PIL_FORMAT_TO_MIME.get(fmt)
+    if mime is None or mime not in _ALLOWED_TRUSTED_MIME:
+        raise ValueError(f"Unsupported image type after decode (format={fmt or 'unknown'}).")
+    if mime == "image/jpg":
+        mime = "image/jpeg"
+    return mime
 
 
 @router.post("/{user_id}/avatar/generate", response_model=AvatarGenerateResponse)
@@ -42,7 +76,7 @@ async def generate_avatar(
 
     **Flow**
 
-    1. Validate the selfie file type and size.
+    1. Read bytes, enforce size, **sniff** format with Pillow (ignore client ``Content-Type``).
     2. Load the user's profile to obtain avatar config and colour tone.
     3. Pass the selfie bytes to the two-step pipeline in ``backend.avatar_gen``:
        - Gemini Vision extracts a facial-feature description (best-effort).
@@ -54,25 +88,20 @@ async def generate_avatar(
     The raw selfie is **never stored** — it is used only in-memory during the
     request and discarded immediately after generation.
     """
-    # --- Validate MIME type ---
-    mime = (selfie.content_type or "").lower().split(";")[0].strip()
-    if mime not in _ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported file type '{mime}'. Upload a JPEG, PNG, HEIC, or WebP photo.",
-        )
-
-    # --- Read and size-check the selfie ---
     selfie_bytes = await selfie.read()
+    if not selfie_bytes:
+        raise HTTPException(status_code=400, detail="Selfie file is empty.")
     if len(selfie_bytes) > _MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
             detail=f"Selfie exceeds the {_MAX_UPLOAD_BYTES // 1024 // 1024} MB size limit.",
         )
-    if not selfie_bytes:
-        raise HTTPException(status_code=400, detail="Selfie file is empty.")
 
-    # --- Load user profile (avatar config + colour tone) ---
+    try:
+        mime = _trusted_mime_from_image_bytes(selfie_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     profile = get_user_profile(user_id)
     avatar_config: AvatarConfig = (
         profile.avatar_config if profile and profile.avatar_config else AvatarConfig()
@@ -80,11 +109,11 @@ async def generate_avatar(
     color_tone: str | None = profile.color_tone if profile else None
     profile_gender: str | None = profile.gender if profile else None
 
-    # --- Generate the portrait ---
     logger.info(
-        "avatar_router: generating avatar for user_id=%s selfie_bytes=%d",
+        "avatar_router: generating avatar for user_id=%s selfie_bytes=%d mime=%s",
         user_id,
         len(selfie_bytes),
+        mime,
     )
     try:
         jpeg_bytes = await generate_avatar_image(
@@ -100,14 +129,12 @@ async def generate_avatar(
         logger.exception("avatar generation failed for user_id=%s", user_id)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    # --- Persist the generated image ---
     try:
         avatar_url = store_avatar_image(user_id, jpeg_bytes)
-    except Exception as exc:
+    except Exception:
         logger.exception("avatar storage failed for user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="Failed to store the generated avatar.") from exc
 
-    # --- Update the profile with the new URL ---
     updated_config = AvatarConfig(
         hair_style=avatar_config.hair_style,
         hair_color=avatar_config.hair_color,

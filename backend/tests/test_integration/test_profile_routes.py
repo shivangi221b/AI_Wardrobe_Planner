@@ -125,6 +125,29 @@ class TestPutProfile:
         assert r.status_code == 200
         assert r.json()["avatar_config"]["avatar_image_url"] == "https://example.com/avatar.jpg"
 
+    async def test_avatar_config_partial_merge_preserves_other_fields(self, client):
+        await client.put(
+            "/users/u1/profile",
+            json={
+                "avatar_config": {
+                    "hair_style": "long_straight",
+                    "hair_color": "black",
+                    "skin_tone": "medium",
+                    "avatar_image_url": "https://example.com/p.jpg",
+                }
+            },
+        )
+        r = await client.put(
+            "/users/u1/profile",
+            json={"avatar_config": {"hair_style": "short_wavy"}},
+        )
+        assert r.status_code == 200
+        cfg = r.json()["avatar_config"]
+        assert cfg["hair_style"] == "short_wavy"
+        assert cfg["hair_color"] == "black"
+        assert cfg["skin_tone"] == "medium"
+        assert cfg["avatar_image_url"] == "https://example.com/p.jpg"
+
 
 # ---------------------------------------------------------------------------
 # PUT with explicit null → clears stored values

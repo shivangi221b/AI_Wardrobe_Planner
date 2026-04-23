@@ -558,7 +558,12 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
       setAvatarError(null);
 
       try {
-        const url = await generateAvatar(userId, selfieUri);
+        const asset = result.assets[0];
+        const url = await generateAvatar(userId, selfieUri, {
+          mimeType: asset.mimeType,
+          fileName: asset.fileName ?? undefined,
+          type: asset.type,
+        });
         const canonical = url.split('?')[0];
         // Same storage path is overwritten on regenerate — bust HTTP cache for the Image view.
         setAvatarImageUrl(`${canonical}?cb=${Date.now()}`);
