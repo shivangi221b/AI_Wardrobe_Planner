@@ -218,6 +218,7 @@ describe('profileUpdateToApiPayload', () => {
         hairColor: 'black',
         bodyType: 'slim',
         skinTone: 'medium_dark',
+        avatarImageUrl: 'https://example.com/av.jpg',
       },
     });
     const cfg = payload.avatar_config as Record<string, unknown>;
@@ -226,6 +227,7 @@ describe('profileUpdateToApiPayload', () => {
     expect(cfg.hair_color).toBe('black');
     expect(cfg.body_type).toBe('slim');
     expect(cfg.skin_tone).toBe('medium_dark');
+    expect(cfg.avatar_image_url).toBe('https://example.com/av.jpg');
   });
 
   it('sends avatar_config: null when avatarConfig is explicitly null', () => {
@@ -237,5 +239,19 @@ describe('profileUpdateToApiPayload', () => {
   it('does not include avatar_config when avatarConfig is undefined', () => {
     const payload = profileUpdateToApiPayload({ gender: 'other' });
     expect('avatar_config' in payload).toBe(false);
+  });
+
+  it('omits nested avatar keys that are undefined so the server can preserve portrait URL', () => {
+    const payload = profileUpdateToApiPayload({
+      avatarConfig: {
+        hairStyle: 'short_wavy',
+        hairColor: 'brown',
+      },
+    });
+    const cfg = payload.avatar_config as Record<string, unknown>;
+    expect(cfg.hair_style).toBe('short_wavy');
+    expect(cfg.hair_color).toBe('brown');
+    expect('avatar_image_url' in cfg).toBe(false);
+    expect('skin_tone' in cfg).toBe(false);
   });
 });

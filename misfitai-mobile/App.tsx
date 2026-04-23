@@ -7,7 +7,7 @@ import { WardrobeScreen } from './src/WardrobeScreen';
 import { EventsScreen } from './src/EventsScreen';
 import { WeeklyPlanScreen } from './src/WeeklyPlanScreen';
 import { ProfileScreen } from './src/ProfileScreen';
-import { registerSignupWithBackend, updateUserProfile, USE_MOCK_API } from './src/api';
+import { generateAvatar, registerSignupWithBackend, updateUserProfile, USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
 import { ProfileSetupScreen, type ProfileSetupResult } from './src/ProfileSetupScreen';
@@ -83,7 +83,7 @@ function ProfileSetupScreenWithMeasurements({
     <ProfileSetupScreen
       initialProfile={session.profile}
       onDone={(result: ProfileSetupResult) => {
-        const { profilePatch, measurements, profileUpdate } = result;
+        const { profilePatch, measurements, profileUpdate, selfieUri } = result;
         const next: Session = {
           ...session,
           profile: { ...(session.profile ?? {}), ...profilePatch },
@@ -98,9 +98,16 @@ function ProfileSetupScreenWithMeasurements({
           });
         }
         // Save extended profile data (color preferences, sizes, avatar) non-blocking.
-        updateUserProfile(next.userId, profileUpdate).catch(() => {
-          /* non-blocking */
-        });
+        // If a selfie was provided, chain avatar generation after the profile is saved.
+        updateUserProfile(next.userId, profileUpdate)
+          .then(() => {
+            if (selfieUri) {
+              return generateAvatar(next.userId, selfieUri);
+            }
+          })
+          .catch(() => {
+            /* non-blocking — avatar generation failure should not block onboarding */
+          });
       }}
     />
   );

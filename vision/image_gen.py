@@ -29,8 +29,48 @@ HF_FLUX_MODEL = "black-forest-labs/FLUX.1-schnell"
 DEFAULT_IMAGEN_MODEL = "imagen-4.0-fast-generate-001"
 
 
+def _max_image_prompt_chars() -> int:
+    """
+    Maximum characters sent to text-to-image APIs (Imagen + HF FLUX).
+
+    Long avatar prompts include a detailed Gemini face description; default allows
+    up to 10,000 characters. Override with ``IMAGE_GEN_MAX_PROMPT_CHARS`` (clamped 256–10000).
+    """
+    try:
+        n = int(os.getenv("IMAGE_GEN_MAX_PROMPT_CHARS", "10000"))
+        return max(256, min(10_000, n))
+    except ValueError:
+        return 10_000
+
+
 def _image_gen_provider() -> str:
     return os.getenv("IMAGE_GEN_PROVIDER", "hf").strip().lower()
+
+
+def _avatar_image_gen_provider() -> str:
+    """
+    Provider for user avatar portraits.
+
+    FLUX.1-schnell (``IMAGE_GEN_PROVIDER=hf``) is fast but often ignores long
+    prompts and falls back to generic “stock” faces. When ``GOOGLE_CLOUD_PROJECT``
+    is set, we default avatars to **Vertex Imagen** unless overridden.
+
+    Env:
+
+    - ``AVATAR_IMAGE_GEN_PROVIDER`` — ``vertex`` | ``hf`` | ``auto`` (default).
+      ``auto`` uses Vertex if ``GOOGLE_CLOUD_PROJECT`` is non-empty, else the
+      same provider as ``IMAGE_GEN_PROVIDER``.
+    """
+    raw = os.getenv("AVATAR_IMAGE_GEN_PROVIDER", "auto").strip().lower()
+    if raw in ("hf", "flux"):
+        return "hf"
+    if raw in ("vertex", "imagen"):
+        return "vertex"
+    if raw == "auto":
+        if (os.getenv("GOOGLE_CLOUD_PROJECT") or "").strip():
+            return "vertex"
+        return _image_gen_provider()
+    return _image_gen_provider()
 
 
 def _target_size() -> int:
@@ -109,8 +149,15 @@ def _generate_with_hf_flux(prompt: str, size: int) -> bytes:
     client = _hf_inference_client()
 
     # FLUX.1-schnell: timestep-distilled, use guidance_scale=0 and a few steps.
-    prompt_text = prompt[:1000]
-    logger.info("ImageGen(HF FLUX) start model=%s prompt_len=%d size=%d", HF_FLUX_MODEL, len(prompt_text), size)
+    cap = _max_image_prompt_chars()
+    prompt_text = prompt[:cap]
+    logger.info(
+        "ImageGen(HF FLUX) start model=%s prompt_len=%d cap=%d size=%d",
+        HF_FLUX_MODEL,
+        len(prompt_text),
+        cap,
+        size,
+    )
 
     max_retries = max(1, int(os.getenv("HF_IMAGE_GEN_MAX_RETRIES", "5")))
     backoff = float(os.getenv("HF_IMAGE_GEN_BACKOFF_SEC", "2.0"))
@@ -178,11 +225,13 @@ def _generate_with_vertex_imagen(prompt: str, size: int) -> bytes:
     """Generate using Imagen on Vertex AI (e.g. Imagen 4 Fast). Bills per image; see Vertex AI pricing."""
     client = _vertex_genai_client()
     model = _imagen_model_id()
-    prompt_text = prompt[:1000]
+    cap = _max_image_prompt_chars()
+    prompt_text = prompt[:cap]
     logger.info(
-        "ImageGen(Vertex Imagen) start model=%s prompt_len=%d target_jpeg=%d",
+        "ImageGen(Vertex Imagen) start model=%s prompt_len=%d cap=%d target_jpeg=%d",
         model,
         len(prompt_text),
+        cap,
         size,
     )
 
@@ -281,4 +330,37 @@ def generate_garment_image(prompt: str) -> bytes:
     raise RuntimeError(
         f"Unknown IMAGE_GEN_PROVIDER={provider}. "
         "Use hf (Hugging Face + HF_API_TOKEN) or vertex (Vertex Imagen + GOOGLE_CLOUD_PROJECT)."
+    )
+
+
+def generate_avatar_portrait_image(prompt: str) -> bytes:
+    """
+    Generate a stylised portrait for the avatar feature.
+
+    Uses :func:`_avatar_image_gen_provider` so local dev can keep
+    ``IMAGE_GEN_PROVIDER=hf`` for garments while avatars use Vertex Imagen when
+    a GCP project is configured.
+    """
+    text = (prompt or "").strip()
+    if not text:
+        raise ValueError("Missing prompt for avatar image generation.")
+
+    size = _target_size()
+    provider = _avatar_image_gen_provider()
+    logger.info(
+        "ImageGen(avatar) provider=%s size=%d prompt_len=%d",
+        provider,
+        size,
+        len(text),
+    )
+
+    if provider == "hf":
+        return _generate_with_hf_flux(text, size=size)
+
+    if provider in ("vertex", "imagen"):
+        return _generate_with_vertex_imagen(text, size=size)
+
+    raise RuntimeError(
+        f"Unknown AVATAR_IMAGE_GEN_PROVIDER / provider resolution={provider}. "
+        "Use hf or vertex."
     )

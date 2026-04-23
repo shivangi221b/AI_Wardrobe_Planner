@@ -162,6 +162,9 @@ class AvatarConfig(BaseModel):
     """One of ``"very_light"``, ``"light"``, ``"medium_light"``, ``"medium"``,
     ``"medium_dark"``, ``"dark"``."""
 
+    avatar_image_url: Optional[str] = None
+    """Public URL of the AI-generated portrait image produced from a selfie."""
+
 
 class UserProfile(BaseModel):
     """
