@@ -13,6 +13,7 @@ import type {
   DayRecommendation,
   EventType,
   Garment,
+  GarmentCategory,
   GarmentSeasonality,
   GarmentFormality,
 } from './types';
@@ -64,7 +65,7 @@ interface AppState {
   addGarmentToWardrobe: (
     payload: {
       name: string;
-      category: 'top' | 'bottom' | 'shoes' | 'accessory';
+      category: GarmentCategory;
       color?: string;
       formality?: GarmentFormality;
       seasonality?: GarmentSeasonality;
@@ -304,7 +305,7 @@ export function AppStateProvider({
 
   const addGarmentToWardrobe = useCallback(async (payload: {
     name: string;
-    category: 'top' | 'bottom' | 'shoes' | 'accessory';
+    category: GarmentCategory;
     color?: string;
     formality?: GarmentFormality;
     seasonality?: GarmentSeasonality;

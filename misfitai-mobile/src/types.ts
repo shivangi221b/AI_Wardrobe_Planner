@@ -133,3 +133,9 @@ export interface UserProfileUpdate {
   bottomSize?: string | null;
   avatarConfig?: AvatarConfig | null;
 }
+
+export interface StylePreferences {
+  aesthetics: string[];
+  brands: string[];
+  colorTones: string[];
+}

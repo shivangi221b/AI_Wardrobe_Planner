@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 
 from vision.extractor import ExtractedGarmentAsset, extract_garments_from_image
 
-from .db import delete_garment, get_measurements, insert_garment, set_garment_hidden, upsert_measurements
+from .db import delete_garment, get_measurements, insert_garment, save_style_preferences, set_garment_hidden, upsert_measurements
 from .models import (
     BodyMeasurements,
     GarmentCategory,
@@ -280,6 +280,51 @@ def add_wardrobe_item(user_id: str, request: AddGarmentRequest) -> GarmentItem:
         updated_at=now,
     )
     return insert_garment(garment)
+
+
+class BulkAddGarmentRequest(BaseModel):
+    items: List[AddGarmentRequest]
+
+
+@app.post("/wardrobe/{user_id}/items/bulk", response_model=List[GarmentItem])
+def add_wardrobe_items_bulk(user_id: str, request: BulkAddGarmentRequest) -> List[GarmentItem]:
+    now = datetime.utcnow()
+    results: List[GarmentItem] = []
+    for item_req in request.items:
+        formality = item_req.formality or GarmentFormality.CASUAL
+        seasonality = item_req.seasonality or GarmentSeasonality.ALL_SEASON
+        tags = build_garment_tags(
+            category=item_req.category,
+            formality=formality,
+            seasonality=seasonality,
+        )
+        garment = GarmentItem(
+            id=str(uuid4()),
+            user_id=user_id,
+            primary_image_url=item_req.primary_image_url,
+            category=item_req.category,
+            sub_category=item_req.name,
+            color_primary=item_req.color,
+            formality=formality,
+            seasonality=seasonality,
+            gender=item_req.gender,
+            tags=tags,
+            created_at=now,
+            updated_at=now,
+        )
+        results.append(insert_garment(garment))
+    return results
+
+
+class StylePreferencesRequest(BaseModel):
+    aesthetics: List[str] = []
+    brands: List[str] = []
+    color_tones: List[str] = []
+
+
+@app.post("/users/{user_id}/style-preferences", status_code=204)
+def save_user_style_preferences(user_id: str, body: StylePreferencesRequest) -> None:
+    save_style_preferences(user_id, body.aesthetics, body.brands, body.color_tones)
 
 
 @app.post("/wardrobe/{user_id}/search-garment", response_model=List[SearchGarmentResult])
