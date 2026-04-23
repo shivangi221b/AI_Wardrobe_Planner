@@ -18,6 +18,7 @@ import { AtmosphereBackground } from './AtmosphereBackground';
 import { palette, radius, type } from './theme';
 import { useAppState } from './AppStateContext';
 import {
+  API_BASE_URL,
   generateAvatar,
   getUserProfile,
   updateUserProfile,
@@ -208,23 +209,46 @@ function SaveBar({
 // Avatar preview + edit modal
 // ---------------------------------------------------------------------------
 
+/** Backend may return a path like ``/assets/local-avatars/…`` — resolve against the API host (needed for Expo web). Preserves ``?cb=`` cache-busters. */
+function resolveAvatarImageUri(url: string): string {
+  const q = url.indexOf('?');
+  const pathPart = q >= 0 ? url.slice(0, q) : url;
+  const query = q >= 0 ? url.slice(q) : '';
+  if (/^https?:\/\//i.test(pathPart)) return `${pathPart}${query}`;
+  if (pathPart.startsWith('/')) return `${API_BASE_URL}${pathPart}${query}`;
+  return url;
+}
+
 function AvatarPreview({
   avatar,
   skinTone,
+  imageUri,
 }: {
   avatar: AvatarConfig | null | undefined;
   skinTone: SkinTone | null | undefined;
+  /** When set, shows the generated portrait at compact thumbnail size (placeholder circle otherwise). */
+  imageUri?: string | null;
 }) {
   const hex =
     SKIN_TONES.find((t) => t.key === (avatar?.skinTone ?? skinTone))?.hex ?? '#D4956A';
 
   return (
     <View style={s.avatarPreview}>
-      {/* Simple silhouette placeholder — replace with actual illustration assets */}
-      <View style={[s.avatarCircle, { backgroundColor: hex }]}>
-        <Text style={s.avatarInitial}>👤</Text>
-      </View>
+      {imageUri ? (
+        <Image
+          source={{ uri: resolveAvatarImageUri(imageUri) }}
+          style={s.avatarImageThumb}
+          resizeMode="cover"
+        />
+      ) : (
+        <View style={[s.avatarCircle, { backgroundColor: hex }]}>
+          <Text style={s.avatarInitial}>👤</Text>
+        </View>
+      )}
       <View style={s.avatarDetails}>
+        <Text style={s.avatarLine}>
+          {imageUri ? 'Illustrated portrait' : 'Preview'}
+        </Text>
         <Text style={s.avatarLine}>
           {avatar?.bodyType ? avatar.bodyType.replace('_', ' ') : 'Body type: —'}
         </Text>
@@ -393,7 +417,13 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
           setBottomSize(p.bottomSize ?? null);
           setShoeSize(p.shoeSize ?? '');
           setAvatar(p.avatarConfig ?? null);
-          setAvatarImageUrl(p.avatarConfig?.avatarImageUrl ?? null);
+          {
+            const raw = p.avatarConfig?.avatarImageUrl ?? null;
+            const base = raw ? raw.split('?')[0] : null;
+            setAvatarImageUrl(
+              base ? `${base}?cb=${encodeURIComponent(p.updatedAt ?? String(Date.now()))}` : null
+            );
+          }
         }
       })
       .finally(() => setLoading(false));
@@ -529,11 +559,12 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
 
       try {
         const url = await generateAvatar(userId, selfieUri);
-        setAvatarImageUrl(url);
-        // Merge the new URL into the existing avatar config.
+        const canonical = url.split('?')[0];
+        // Same storage path is overwritten on regenerate — bust HTTP cache for the Image view.
+        setAvatarImageUrl(`${canonical}?cb=${Date.now()}`);
         const newAvatar: AvatarConfig = {
           ...(avatar ?? {}),
-          avatarImageUrl: url,
+          avatarImageUrl: canonical,
         };
         setAvatar(newAvatar);
         await updateUserProfile(userId, { avatarConfig: newAvatar });
@@ -548,6 +579,12 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
   );
 
   const promptSelfieSource = useCallback(() => {
+    // react-native-web: Alert with action buttons is unreliable (often no UI).
+    // Open the file picker immediately; native keeps the camera vs library sheet.
+    if (Platform.OS === 'web') {
+      void pickSelfie(false);
+      return;
+    }
     Alert.alert(
       'Generate your avatar',
       'Choose a photo source',
@@ -753,16 +790,16 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
         {/* ---- Avatar ---- */}
         <SectionHeader title="Avatar" />
         <View style={s.card}>
-          {/* Generated portrait (if available) or placeholder */}
-          {avatarImageUrl ? (
-            <Image
-              source={{ uri: avatarImageUrl }}
-              style={s.avatarImage}
-              resizeMode="cover"
-            />
-          ) : (
-            <AvatarPreview avatar={avatar} skinTone={skinTone} />
-          )}
+          <AvatarPreview
+            avatar={avatar}
+            skinTone={skinTone}
+            imageUri={avatarImageUrl}
+          />
+          {!gender ? (
+            <Text style={s.avatarHint}>
+              Set your gender under Personal info so generated portraits match you more reliably.
+            </Text>
+          ) : null}
 
           {/* Generation status / error */}
           {avatarGenerating ? (
@@ -1095,10 +1132,10 @@ const s = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: palette.line,
   },
-  avatarImage: {
-    width: '100%',
-    aspectRatio: 1,
-    borderRadius: radius.lg,
+  avatarImageThumb: {
+    width: 88,
+    height: 88,
+    borderRadius: radius.md,
     backgroundColor: palette.bgAlt,
   },
   avatarGeneratingRow: {
@@ -1117,5 +1154,12 @@ const s = StyleSheet.create({
     fontSize: 12,
     color: palette.error,
     fontFamily: type.body,
+  },
+  avatarHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: palette.muted,
+    fontFamily: type.body,
+    lineHeight: 17,
   },
 });

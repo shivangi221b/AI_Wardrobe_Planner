@@ -480,6 +480,10 @@ function Step3({
   }
 
   function promptSource() {
+    if (Platform.OS === 'web') {
+      void handlePickSelfie(false);
+      return;
+    }
     Alert.alert(
       'Add a selfie',
       'Used to generate your personalised avatar',

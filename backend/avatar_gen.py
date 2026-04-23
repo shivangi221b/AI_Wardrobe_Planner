@@ -37,15 +37,37 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-_VISION_MODEL = os.getenv("AVATAR_VISION_MODEL", "gemini-2.0-flash-001")
 _MAX_SELFIE_BYTES = 15 * 1024 * 1024  # 15 MB sanity cap
 
+
+def _avatar_vision_model() -> str:
+    """
+    Gemini model for selfie → facial description (Vertex AI).
+
+    Uses only ``VERTEX_AI_VISION_MODEL`` — same variable as ``vision/extractor.py``
+    for garment vision. If unset, defaults to ``gemini-2.5-flash``.
+    """
+    return (os.getenv("VERTEX_AI_VISION_MODEL") or "gemini-2.5-flash").strip()
+
 _FEATURE_EXTRACTION_PROMPT = (
-    "Look at this photo of a real person and describe only their physical appearance "
-    "in a single compact sentence (max 60 words). Focus on: face shape, eye shape and "
-    "colour, skin tone nuance, and any other distinctive features. "
-    "Do NOT include their name, gender, clothing, or background. "
-    "Do NOT say 'I cannot' — describe only what you can observe."
+    "You are helping build an illustrated avatar from a selfie. Study the face and head closely.\n\n"
+    "Write a detailed, factual description in plain prose. Aim for roughly 150–400 words. "
+    "Cover everything clearly visible:\n"
+    "• Face shape, overall proportions, forehead height, cheek volume.\n"
+    "• Eyebrows: thickness, arch, distance from eyes.\n"
+    "• Eyes: shape, size, spacing, eyelid shape, visible iris colour if discernible, under-eye area.\n"
+    "• Nose: bridge width, length, tip shape, nostril visibility.\n"
+    "• Mouth and lips: width, upper/lower lip fullness, resting expression.\n"
+    "• Jaw, chin, and neck (if visible): angles, width, chin shape.\n"
+    "• Ears: only if visible — size, angle, prominence.\n"
+    "• Skin: tone and undertone hints, texture or sheen (neutral, observational wording).\n"
+    "• Facial hair: clean-shaven, stubble, beard, or mustache — coverage, shape, density.\n"
+    "• Hair: hairline, density, length, how it falls, colour (including gray if visible).\n"
+    "• Face-framing accessories: glasses, hat brim, etc., if present.\n"
+    "• Approximate apparent age band (e.g. late twenties, forties) — structural only.\n\n"
+    "Rules: Use neutral structural language. Do not name the person or guess their identity, "
+    "job, or ethnicity labels. Do not describe clothing below the collar or the background. "
+    "Do not refuse; describe only what you can see."
 )
 
 
@@ -65,6 +87,23 @@ def _gemini_client() -> Optional[genai.Client]:
 # Step 1 — Gemini Vision: selfie → facial feature description
 # ---------------------------------------------------------------------------
 
+
+def _text_from_generate_content_response(response: genai_types.GenerateContentResponse) -> str:
+    """Aggregate visible text from a Gemini response (``response.text`` can be empty on 2.5 models)."""
+    direct = (getattr(response, "text", None) or "").strip()
+    if direct:
+        return direct
+    parts_out: list[str] = []
+    for cand in getattr(response, "candidates", None) or []:
+        content = getattr(cand, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            t = getattr(part, "text", None)
+            if t:
+                parts_out.append(t)
+        break
+    return " ".join(parts_out).strip()
+
+
 async def _describe_selfie(selfie_bytes: bytes, mime_type: str) -> Optional[str]:
     """
     Send the selfie to Gemini Vision and return a short facial-feature
@@ -75,24 +114,47 @@ async def _describe_selfie(selfie_bytes: bytes, mime_type: str) -> Optional[str]
         logger.info("avatar_gen: GOOGLE_CLOUD_PROJECT not set — skipping Gemini selfie analysis")
         return None
 
-    image_part = genai_types.Part.from_bytes(data=selfie_bytes, mime_type=mime_type)
+    # Instruction first, then image — matches ``vision/extractor.py`` and improves adherence.
     text_part = genai_types.Part.from_text(text=_FEATURE_EXTRACTION_PROMPT)
+    image_part = genai_types.Part.from_bytes(data=selfie_bytes, mime_type=mime_type)
 
+    model = _avatar_vision_model()
+    cfg_kw: dict = {"max_output_tokens": 4096, "temperature": 0.25}
+    if "2.5" in model:
+        cfg_kw["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=0)
+    cfg = genai_types.GenerateContentConfig(**cfg_kw)
     try:
         response = await asyncio.to_thread(
             client.models.generate_content,
-            model=_VISION_MODEL,
-            contents=[image_part, text_part],
-            config=genai_types.GenerateContentConfig(
-                max_output_tokens=100,
-                temperature=0.2,
-            ),
+            model=model,
+            contents=[text_part, image_part],
+            config=cfg,
         )
-        description = (response.text or "").strip()
-        logger.info("avatar_gen: Gemini selfie description length=%d", len(description))
+        description = _text_from_generate_content_response(response)
+        if not description:
+            pf = getattr(response, "prompt_feedback", None)
+            block = getattr(pf, "block_reason", None) if pf else None
+            c0 = (getattr(response, "candidates", None) or [None])[0]
+            finish = getattr(c0, "finish_reason", None) if c0 else None
+            logger.warning(
+                "avatar_gen: Gemini selfie returned empty text model=%s block_reason=%s finish_reason=%s",
+                model,
+                block,
+                finish,
+            )
+        else:
+            logger.info(
+                "avatar_gen: Gemini selfie OK model=%s description_len=%d",
+                model,
+                len(description),
+            )
         return description if description else None
     except Exception as exc:
-        logger.warning("avatar_gen: Gemini selfie analysis failed: %s", exc)
+        logger.warning(
+            "avatar_gen: Gemini selfie analysis failed model=%s: %s",
+            model,
+            exc,
+        )
         return None
 
 
@@ -100,10 +162,80 @@ async def _describe_selfie(selfie_bytes: bytes, mime_type: str) -> Optional[str]
 # Step 2 — Prompt construction
 # ---------------------------------------------------------------------------
 
+def _primary_subject_line(gender: Optional[str]) -> str:
+    """First tokens in the image prompt — models weight the beginning heavily."""
+    g = (gender or "").strip().lower()
+    if g == "male":
+        return (
+            "Illustrated head-and-shoulders portrait of exactly one adult man, "
+            "character illustration with soft shading, plain off-white background, not a photograph."
+        )
+    if g == "female":
+        return (
+            "Illustrated head-and-shoulders portrait of exactly one adult woman, "
+            "character illustration with soft shading, plain off-white background, not a photograph."
+        )
+    if g == "other":
+        return (
+            "Illustrated head-and-shoulders portrait of exactly one adult person, "
+            "inclusive non-stereotypical look, character illustration with soft shading, "
+            "plain off-white background, not a photograph."
+        )
+    return (
+        "Illustrated head-and-shoulders portrait of exactly one adult person matching the facial "
+        "description below, character illustration with soft shading, plain off-white background, "
+        "not a photograph."
+    )
+
+
+def _anti_stock_clause(gender: Optional[str]) -> str:
+    g = (gender or "").strip().lower()
+    base = (
+        "A single distinctive individual with natural asymmetry; "
+        "avoid generic stock clipart, corporate vector templates, beauty-app default faces, "
+        "and symmetrical influencer glam."
+    )
+    if g == "male":
+        return (
+            base
+            + " No red lipstick, no winged eyeliner, no glamour makeup or long feminine lashes "
+            "unless clearly matching the reference description."
+        )
+    return base
+
+
+def _subject_gender_clause(gender: Optional[str]) -> Optional[str]:
+    """
+    Strong gender anchor for the portrait — without this, image models often default
+    to a feminine-presenting illustration regardless of the reference description.
+    """
+    if not gender:
+        return None
+    g = str(gender).strip().lower()
+    if g == "male":
+        return (
+            "Portrait subject is an adult male: keep masculine facial structure, jaw, and brow; "
+            "short or styled male-typical hair unless the hair description below says otherwise; "
+            "do not render as female or feminine-presenting."
+        )
+    if g == "female":
+        return (
+            "Portrait subject is an adult female: keep feminine facial structure; "
+            "do not render as male or masculine-presenting unless the description clearly indicates otherwise."
+        )
+    if g == "other":
+        return (
+            "Portrait subject is an adult with inclusive, non-stereotypical or androgynous presentation; "
+            "avoid defaulting to hyper-feminine or hyper-masculine stock character looks."
+        )
+    return None
+
+
 def _build_avatar_prompt(
     facial_description: Optional[str],
     avatar_config: Optional[AvatarConfig],
     color_tone: Optional[str],
+    gender: Optional[str] = None,
 ) -> str:
     """
     Assemble a Imagen-safe prompt for a stylised portrait illustration.
@@ -113,34 +245,46 @@ def _build_avatar_prompt(
     """
     cfg = avatar_config or AvatarConfig()
 
-    lines: list[str] = [
-        "A stylised, flat-design fashion-app profile illustration of a person.",
-        "Clean vector art style with soft shading, neutral off-white background.",
-        "NOT a photograph. NOT a realistic render. Illustrated portrait, head and shoulders.",
-    ]
+    # Put the Gemini face description immediately after the subject line so T2I models
+    # weight it heavily (and so truncation, if any, drops style boilerplate last).
+    lines: list[str] = [_primary_subject_line(gender)]
 
-    # Facial features from selfie analysis
     if facial_description:
-        lines.append(f"Facial features reference (illustrated): {facial_description}.")
+        lines.append(
+            "PRIMARY facial reference from the user's photo — the illustration MUST reflect these "
+            f"traits (interpret as stylised art, not a photo): {facial_description}"
+        )
 
-    # Explicit avatar config
+    gender_clause = _subject_gender_clause(gender)
+    if gender_clause:
+        lines.append(gender_clause)
+    else:
+        lines.append(
+            "Match apparent gender presentation and age from the facial description only; "
+            "do not substitute a different gender presentation."
+        )
+
+    # Explicit avatar config (reinforces hair/body when the user set preferences)
     if cfg.skin_tone:
-        lines.append(f"Skin tone: {cfg.skin_tone.replace('_', ' ')}.")
+        lines.append(f"User skin tone preference for the illustration: {cfg.skin_tone.replace('_', ' ')}.")
     if cfg.hair_style and cfg.hair_color:
-        lines.append(f"Hair: {cfg.hair_color.replace('_', ' ')} coloured, {cfg.hair_style.replace('_', ' ')} style.")
+        lines.append(
+            f"User hair preference: {cfg.hair_color.replace('_', ' ')} colour, "
+            f"{cfg.hair_style.replace('_', ' ')} style — align with the photo description when both apply."
+        )
     elif cfg.hair_style:
-        lines.append(f"Hair style: {cfg.hair_style.replace('_', ' ')}.")
+        lines.append(f"User hair style preference: {cfg.hair_style.replace('_', ' ')}.")
     elif cfg.hair_color:
-        lines.append(f"Hair colour: {cfg.hair_color.replace('_', ' ')}.")
+        lines.append(f"User hair colour preference: {cfg.hair_color.replace('_', ' ')}.")
     if cfg.body_type:
-        lines.append(f"Body type: {cfg.body_type} build.")
+        lines.append(f"Body type for shoulders and neck: {cfg.body_type} build.")
 
-    # Colour tone / palette
     tone = (color_tone or "").strip().lower()
     if tone in ("warm", "cool", "neutral"):
         lines.append(f"Overall colour palette: {tone} tones.")
 
-    lines.append("Fashion-forward, modern aesthetic. Square crop, centred composition.")
+    lines.append(_anti_stock_clause(gender))
+    lines.append("Square crop, centred composition, single face only.")
 
     return " ".join(lines)
 
@@ -154,6 +298,7 @@ async def generate_avatar_image(
     selfie_mime: str,
     avatar_config: Optional[AvatarConfig] = None,
     color_tone: Optional[str] = None,
+    gender: Optional[str] = None,
 ) -> bytes:
     """
     Generate a stylised 2-D portrait avatar image and return JPEG bytes.
@@ -163,6 +308,8 @@ async def generate_avatar_image(
         selfie_mime:   MIME type, e.g. ``"image/jpeg"`` or ``"image/png"``.
         avatar_config: Structured avatar preferences (hair, skin tone, body type).
         color_tone:    ``"warm"``, ``"cool"``, or ``"neutral"`` — from the user profile.
+        gender:        ``"male"``, ``"female"``, or ``"other"`` from the user profile — strongly
+                       influences portrait gender presentation so the output matches the user.
 
     Returns:
         JPEG bytes of the generated portrait (square, 512 × 512 by default).
@@ -179,11 +326,12 @@ async def generate_avatar_image(
     facial_description = await _describe_selfie(selfie_bytes, selfie_mime)
 
     # Step 2 — build Imagen prompt
-    prompt = _build_avatar_prompt(facial_description, avatar_config, color_tone)
-    logger.info("avatar_gen: prompt length=%d", len(prompt))
+    prompt = _build_avatar_prompt(facial_description, avatar_config, color_tone, gender=gender)
+    logger.info("avatar_gen: prompt length=%d gender=%r", len(prompt), gender)
+    logger.info("avatar_gen: prompt preview: %s", prompt[:480] + ("…" if len(prompt) > 480 else ""))
 
-    # Step 3 — generate image (runs sync code in thread pool to avoid blocking)
-    from vision.image_gen import generate_garment_image  # local import to avoid circular
+    # Step 3 — generate image (avatars use their own provider selection; see generate_avatar_portrait_image)
+    from vision.image_gen import generate_avatar_portrait_image  # local import to avoid circular
 
-    jpeg_bytes: bytes = await asyncio.to_thread(generate_garment_image, prompt)
+    jpeg_bytes: bytes = await asyncio.to_thread(generate_avatar_portrait_image, prompt)
     return jpeg_bytes

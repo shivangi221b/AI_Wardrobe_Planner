@@ -78,6 +78,7 @@ async def generate_avatar(
         profile.avatar_config if profile and profile.avatar_config else AvatarConfig()
     )
     color_tone: str | None = profile.color_tone if profile else None
+    profile_gender: str | None = profile.gender if profile else None
 
     # --- Generate the portrait ---
     logger.info(
@@ -91,6 +92,7 @@ async def generate_avatar(
             selfie_mime=mime,
             avatar_config=avatar_config,
             color_tone=color_tone,
+            gender=profile_gender,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

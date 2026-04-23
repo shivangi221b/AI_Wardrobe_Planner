@@ -1191,12 +1191,26 @@ export async function generateAvatar(userId: string, selfieUri: string): Promise
   }
 
   const formData = new FormData();
-  // React Native / Expo FormData accepts an object with uri, name, type.
-  formData.append('selfie', {
-    uri: selfieUri,
-    name: 'selfie.jpg',
-    type: 'image/jpeg',
-  } as unknown as Blob);
+
+  if (Platform.OS === 'web') {
+    // Browser FormData requires a Blob/File, not { uri }.
+    const res = await fetch(selfieUri);
+    const blob = await res.blob();
+    const name =
+      blob.type === 'image/png'
+        ? 'selfie.png'
+        : blob.type === 'image/webp'
+          ? 'selfie.webp'
+          : 'selfie.jpg';
+    formData.append('selfie', blob, name);
+  } else {
+    // React Native FormData accepts an object with uri, name, type.
+    formData.append('selfie', {
+      uri: selfieUri,
+      name: 'selfie.jpg',
+      type: 'image/jpeg',
+    } as unknown as Blob);
+  }
 
   const response = await fetch(
     `${API_BASE_URL}/users/${encodeURIComponent(userId)}/avatar/generate`,
