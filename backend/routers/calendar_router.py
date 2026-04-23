@@ -73,7 +73,7 @@ async def sync_calendar(user_id: str, body: CalendarSyncRequest) -> WeekEventsBo
     """
     time_min, time_max = _iso_week_bounds()
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(trust_env=False) as client:
         response = await client.get(
             GOOGLE_CALENDAR_EVENTS_URL,
             headers={"Authorization": f"Bearer {body.google_access_token}"},

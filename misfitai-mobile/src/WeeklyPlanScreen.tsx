@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -28,6 +28,13 @@ function isPlaceholderName(name: string): boolean {
   );
 }
 
+type CollagePiece = {
+  name: string;
+  image: { uri: string } | ReturnType<typeof getImageForGarment>;
+  garmentId?: string;
+  hidden?: boolean;
+};
+
 function outfitSummaryLabel(rec: { outfit: { topName: string; bottomName: string; dressName?: string | null } }): string {
   if (rec.outfit.dressName && !isPlaceholderName(rec.outfit.dressName)) {
     return rec.outfit.dressName;
@@ -47,14 +54,26 @@ export function WeeklyPlanScreen({
   onNavigateToWardrobe,
   onBackToCalendar,
 }: {
-  onRegenerateWeek: () => Promise<void>;
+  onRegenerateWeek: (includeLaundry?: boolean) => Promise<void>;
   onNavigateToWardrobe?: () => void;
   onBackToCalendar?: () => void;
 }) {
-  const { garments, recommendations, toggleGarmentHidden } = useAppState();
+  const {
+    garments,
+    recommendations,
+    toggleGarmentHidden,
+    logWearEvent,
+    logOutfitEntry,
+    weeklyRecsTaggedIdsByDay,
+    markWeeklyRecsItemWorn,
+  } = useAppState();
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('monday');
+  const [includeLaundry, setIncludeLaundry] = useState(false);
+  const [loggingPieceId, setLoggingPieceId] = useState<string | null>(null);
+  const [wearSaveError, setWearSaveError] = useState<string | null>(null);
+  const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const cardFade = useRef(new Animated.Value(0)).current;
   const pieceAnimations = useRef([0, 1, 2, 3].map(() => new Animated.Value(0))).current;
@@ -105,11 +124,55 @@ export function WeeklyPlanScreen({
     ]).start();
   }, [selectedRecommendation, cardFade, pieceAnimations]);
 
+  useEffect(() => {
+    setWearSaveError(null);
+  }, [selectedDay]);
+
+  const pieceWornForThisDayTab = useCallback(
+    (piece: { garmentId?: string }) => {
+      if (!piece.garmentId) return false;
+      const ids = weeklyRecsTaggedIdsByDay[selectedDay];
+      return ids?.includes(piece.garmentId) ?? false;
+    },
+    [selectedDay, weeklyRecsTaggedIdsByDay],
+  );
+
+  const handleTagPieceWorn = useCallback(
+    async (piece: CollagePiece) => {
+      if (!piece.garmentId || !selectedRecommendation || loggingPieceId) return;
+      setLoggingPieceId(piece.garmentId);
+      setWearSaveError(null);
+      const day = selectedRecommendation.day;
+      const gid = piece.garmentId;
+      try {
+        await logWearEvent(gid, todayKey);
+        markWeeklyRecsItemWorn(day, gid);
+        try {
+          await logOutfitEntry(todayKey, [gid], selectedRecommendation.eventType);
+        } catch {
+          // Wear is saved; outfit log is optional (e.g. DB table missing). History may still show via wear API later.
+        }
+      } catch {
+        setWearSaveError('Could not save. Check your connection and try again.');
+      } finally {
+        setLoggingPieceId(null);
+      }
+    },
+    [
+      selectedRecommendation,
+      loggingPieceId,
+      todayKey,
+      logWearEvent,
+      logOutfitEntry,
+      markWeeklyRecsItemWorn,
+    ],
+  );
+
   const handleRegenerate = async () => {
     try {
       setRegenerating(true);
       setError(null);
-      await onRegenerateWeek();
+      await onRegenerateWeek(includeLaundry);
     } catch {
       setError('Failed to regenerate week.');
     } finally {
@@ -136,12 +199,6 @@ export function WeeklyPlanScreen({
   const topName = selectedRecommendation?.outfit.topName || topGarment?.name || '';
   const bottomName = selectedRecommendation?.outfit.bottomName || bottomGarment?.name || '';
 
-  type CollagePiece = {
-    name: string;
-    image: { uri: string } | ReturnType<typeof getImageForGarment>;
-    garmentId?: string;
-    hidden?: boolean;
-  };
   const collagePieces: CollagePiece[] = [];
 
   const missingTop = !isDressOutfit && (!topName || isPlaceholderName(topName));
@@ -280,12 +337,15 @@ export function WeeklyPlanScreen({
               <View style={styles.collageGrid}>
                 {collagePieces.map((piece, index) => {
                   const pieceAnim = pieceAnimations[index];
+                  const worn = pieceWornForThisDayTab(piece);
+                  const savingThis = loggingPieceId === piece.garmentId;
                   return (
                     <Animated.View
                       key={`${piece.name}-${index}`}
                       style={[
                         styles.pieceCard,
                         piece.hidden && styles.pieceCardHidden,
+                        worn && styles.pieceCardWorn,
                         {
                           opacity: pieceAnim,
                           transform: [
@@ -302,7 +362,7 @@ export function WeeklyPlanScreen({
                       <Pressable
                         onLongPress={() => handlePieceLongPress(piece)}
                         delayLongPress={400}
-                        style={styles.piecePressable}
+                        style={styles.piecePressableTop}
                       >
                         <Image source={piece.image} style={styles.pieceImage} resizeMode="contain" />
                         <Text style={styles.pieceLabel}>{piece.name}</Text>
@@ -310,10 +370,31 @@ export function WeeklyPlanScreen({
                           <Text style={styles.pieceHiddenBadge}>Hidden</Text>
                         ) : null}
                       </Pressable>
+                      {piece.garmentId ? (
+                        worn ? (
+                          <View style={styles.pieceWornPill}>
+                            <Text style={styles.pieceWornPillText}>Worn today</Text>
+                          </View>
+                        ) : (
+                          <Pressable
+                            onPress={() => handleTagPieceWorn(piece)}
+                            style={styles.pieceTagBtn}
+                            disabled={loggingPieceId !== null}
+                          >
+                            <Text style={styles.pieceTagBtnText}>
+                              {savingThis ? 'Saving...' : 'Tag as worn'}
+                            </Text>
+                          </Pressable>
+                        )
+                      ) : (
+                        <Text style={styles.pieceTrackHint}>Wardrobe item needed to track</Text>
+                      )}
                     </Animated.View>
                   );
                 })}
               </View>
+
+              {wearSaveError ? <Text style={styles.wearSaveError}>{wearSaveError}</Text> : null}
 
               {hasMissingItems ? (
                 <View style={styles.missingItemsBanner}>
@@ -364,6 +445,26 @@ export function WeeklyPlanScreen({
         ) : null}
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+        {recommendations.length > 0 ? (
+          <Pressable
+            onPress={() => setIncludeLaundry((prev) => !prev)}
+            style={styles.laundryToggleRow}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: includeLaundry }}
+          >
+            <View style={[styles.toggleTrack, includeLaundry && styles.toggleTrackOn]}>
+              <View style={[styles.toggleThumb, includeLaundry && styles.toggleThumbOn]} />
+            </View>
+            <Text style={styles.laundryToggleLabel}>Include laundry items</Text>
+          </Pressable>
+        ) : null}
+
+        {includeLaundry ? (
+          <Text style={styles.laundryWarning}>
+            Items currently in laundry will be included in suggestions.
+          </Text>
+        ) : null}
 
         {onBackToCalendar ? (
           <Pressable onPress={onBackToCalendar} style={styles.secondaryButton}>
@@ -478,9 +579,57 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     borderColor: palette.lineStrong,
   },
-  piecePressable: {
+  pieceCardWorn: {
+    borderColor: palette.accent,
+    backgroundColor: palette.accentSoft,
+  },
+  piecePressableTop: {
     padding: 10,
+    paddingBottom: 6,
     alignItems: 'center',
+  },
+  pieceTagBtn: {
+    marginHorizontal: 8,
+    marginBottom: 10,
+    borderRadius: radius.pill,
+    backgroundColor: palette.accent,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  pieceTagBtnText: {
+    color: palette.textOnAccent,
+    fontSize: 12,
+    fontFamily: type.bodyDemi,
+  },
+  pieceWornPill: {
+    marginHorizontal: 8,
+    marginBottom: 10,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    backgroundColor: palette.panelStrong,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  pieceWornPillText: {
+    color: palette.muted,
+    fontSize: 12,
+    fontFamily: type.bodyDemi,
+  },
+  pieceTrackHint: {
+    marginHorizontal: 8,
+    marginBottom: 10,
+    fontSize: 11,
+    fontFamily: type.body,
+    color: palette.muted,
+    textAlign: 'center',
+  },
+  wearSaveError: {
+    fontSize: 13,
+    fontFamily: type.body,
+    color: palette.error,
+    textAlign: 'center',
+    marginTop: 4,
   },
   pieceImage: {
     width: '100%',
@@ -604,5 +753,42 @@ const styles = StyleSheet.create({
     color: palette.ink,
     fontSize: 14,
     fontFamily: type.bodyDemi,
+  },
+  laundryToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 4,
+  },
+  laundryToggleLabel: {
+    fontSize: 13,
+    fontFamily: type.bodyMedium,
+    color: palette.inkSoft,
+  },
+  toggleTrack: {
+    width: 40,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: palette.line,
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  toggleTrackOn: {
+    backgroundColor: palette.accent,
+  },
+  toggleThumb: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: palette.panelStrong,
+  },
+  toggleThumbOn: {
+    alignSelf: 'flex-end',
+  },
+  laundryWarning: {
+    fontSize: 12,
+    fontFamily: type.body,
+    color: palette.error,
+    paddingHorizontal: 2,
   },
 });

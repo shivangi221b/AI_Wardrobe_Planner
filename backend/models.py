@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import List, Optional
 
@@ -34,6 +34,11 @@ class GarmentGender(str, Enum):
     MEN = "men"
     WOMEN = "women"
     UNISEX = "unisex"
+
+
+class LaundryStatus(str, Enum):
+    CLEAN = "clean"
+    IN_LAUNDRY = "in_laundry"
 
 
 def build_garment_tags(
@@ -92,6 +97,11 @@ class GarmentItem(BaseModel):
     # Recommendation usage tracking.
     times_recommended: int = 0
     hidden_from_recommendations: bool = False
+
+    # Wear tracking.
+    laundry_status: LaundryStatus = LaundryStatus.CLEAN
+    last_worn_date: Optional[date] = None
+    times_worn: int = 0
 
     # Opaque embedding identifier; actual vector stored in a separate service/index.
     embedding_id: Optional[str] = None
@@ -271,6 +281,9 @@ class WeekRecommendationRequest(BaseModel):
     """Gender identity of the user (``"male"``, ``"female"``, or ``"other"``).
     When provided, garments tagged for the opposite binary gender are excluded."""
 
+    include_laundry: bool = False
+    """When True, items marked *in_laundry* are still eligible for recommendations."""
+
 
 class DayOutfitSuggestion(BaseModel):
     """Structured outfit recommendation for a single day."""
@@ -291,3 +304,65 @@ class WeekRecommendationResponse(BaseModel):
 
     user_id: str
     recommendations: List[DayOutfitSuggestion]
+
+
+# ---------------------------------------------------------------------------
+# Wear tracking & outfit history models
+# ---------------------------------------------------------------------------
+
+
+class WearLogEntry(BaseModel):
+    """Single wear event for one garment."""
+
+    id: str
+    user_id: str
+    garment_id: str
+    worn_date: date
+    created_at: datetime
+
+
+class OutfitLogEntry(BaseModel):
+    """Records which garments were worn together on a given date."""
+
+    id: str
+    user_id: str
+    worn_date: date
+    garment_ids: List[str] = []
+    event_type: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+
+
+class LogWearRequest(BaseModel):
+    """Body for ``POST /wardrobe/{user_id}/{garment_id}/wear``."""
+
+    worn_date: Optional[date] = None
+    """Defaults to today when omitted."""
+
+
+class SetLaundryRequest(BaseModel):
+    """Body for ``PATCH /wardrobe/{user_id}/{garment_id}/laundry``."""
+
+    status: LaundryStatus
+
+
+class LogOutfitRequest(BaseModel):
+    """Body for ``POST /users/{user_id}/outfit-log``."""
+
+    worn_date: date
+    garment_ids: List[str]
+    event_type: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class GarmentInsights(BaseModel):
+    """Aggregated usage stats for a user's wardrobe."""
+
+    most_worn: List[dict]
+    """Top-5 garments by times_worn, each with ``garment_id`` and ``times_worn``."""
+
+    not_worn_recently: List[str]
+    """Garment ids not worn in the last 30 days (or never worn)."""
+
+    total_items: int
+    total_wears: int

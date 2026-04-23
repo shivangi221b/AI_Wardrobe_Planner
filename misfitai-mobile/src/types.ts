@@ -12,6 +12,8 @@ export type GarmentSeasonality = 'hot' | 'mild' | 'cold' | 'all_season';
 
 export type GarmentGender = 'men' | 'women' | 'unisex';
 
+export type LaundryStatus = 'clean' | 'in_laundry';
+
 export interface Garment {
   id: string;
   userId?: string;
@@ -28,6 +30,9 @@ export interface Garment {
   timesRecommended?: number;
   hiddenFromRecommendations?: boolean;
   tags?: string[];
+  laundryStatus?: LaundryStatus;
+  lastWornDate?: string | null;
+  timesWorn?: number;
 }
 
 export interface BodyMeasurements {
@@ -130,4 +135,31 @@ export interface UserProfileUpdate {
   topSize?: string | null;
   bottomSize?: string | null;
   avatarConfig?: AvatarConfig | null;
+}
+
+// ---------------------------------------------------------------------------
+// Wear tracking & outfit history
+// ---------------------------------------------------------------------------
+
+export interface WearLogEntry {
+  id: string;
+  garmentId: string;
+  wornDate: string;
+  createdAt?: string;
+}
+
+export interface OutfitLogEntry {
+  id: string;
+  wornDate: string;
+  garmentIds: string[];
+  eventType?: string | null;
+  notes?: string | null;
+  createdAt?: string;
+}
+
+export interface GarmentInsights {
+  mostWorn: { garmentId: string; timesWorn: number }[];
+  notWornRecently: string[];
+  totalItems: number;
+  totalWears: number;
 }

@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime
+import uuid
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Any, List, Optional, TypedDict
 
@@ -16,9 +17,13 @@ from .models import (
     GarmentCategory,
     GarmentFormality,
     GarmentGender,
+    GarmentInsights,
     GarmentItem,
     GarmentSeasonality,
+    LaundryStatus,
+    OutfitLogEntry,
     UserProfile,
+    WearLogEntry,
     build_garment_tags,
 )
 
@@ -37,6 +42,9 @@ _local_user_profiles: dict[str, UserProfile] = {}
 _local_signup_user_ids: set[str] = set()
 # Email/password users when Supabase is unavailable or table writes fall back (see create_password_user).
 _local_app_users_by_email: dict[str, dict[str, str]] = {}
+# In-memory stores for wear/outfit logs (local dev fallback).
+_local_wear_log: dict[str, List[WearLogEntry]] = {}
+_local_outfit_log: dict[str, List[OutfitLogEntry]] = {}
 
 
 class PasswordUserRow(TypedDict):
@@ -263,6 +271,30 @@ def _parse_gender(value: Any) -> Optional[GarmentGender]:
         return None
 
 
+def _parse_laundry_status(value: Any) -> LaundryStatus:
+    if value in (None, ""):
+        return LaundryStatus.CLEAN
+    try:
+        return LaundryStatus(str(value))
+    except Exception:
+        return LaundryStatus.CLEAN
+
+
+def _parse_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
 def _parse_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
@@ -320,6 +352,9 @@ def _row_to_garment(row: dict[str, Any]) -> GarmentItem:
         gender=gender,
         times_recommended=int(row.get("times_recommended") or 0),
         hidden_from_recommendations=bool(row.get("hidden_from_recommendations") or False),
+        laundry_status=_parse_laundry_status(row.get("laundry_status")),
+        last_worn_date=_parse_date(row.get("last_worn_date")),
+        times_worn=int(row.get("times_worn") or 0),
         embedding_id=row.get("embedding_id"),
         tags=tags,
         created_at=_parse_datetime(row.get("created_at")),
@@ -467,6 +502,7 @@ _SUPABASE_GARMENT_COLUMNS = {
     "category", "sub_category", "color_primary", "color_secondary",
     "pattern", "formality", "seasonality", "brand", "size",
     "material", "fit_notes", "embedding_id", "created_at", "updated_at",
+    "laundry_status", "last_worn_date", "times_worn",
 }
 
 
@@ -801,3 +837,248 @@ def upsert_user_profile(user_id: str, data: dict[str, Any]) -> UserProfile:
         logger.exception("upsert_user_profile failed user_id=%s", user_id)
         # Return a best-effort object so callers don't crash.
         return _row_to_user_profile(payload)
+
+
+# ---------------------------------------------------------------------------
+# Wear tracking
+# ---------------------------------------------------------------------------
+
+def _wear_log_table() -> str:
+    return os.getenv("SUPABASE_WEAR_LOG_TABLE", "wear_log")
+
+
+def _outfit_log_table() -> str:
+    return os.getenv("SUPABASE_OUTFIT_LOG_TABLE", "outfit_log")
+
+
+def log_wear_event(user_id: str, garment_id: str, worn_date: date) -> Optional[WearLogEntry]:
+    """Record that *garment_id* was worn on *worn_date*.
+
+    Also bumps ``times_worn`` and sets ``last_worn_date`` on the garment row.
+    """
+    now = datetime.utcnow()
+    entry = WearLogEntry(
+        id=str(uuid.uuid4()),
+        user_id=user_id,
+        garment_id=garment_id,
+        worn_date=worn_date,
+        created_at=now,
+    )
+
+    if _use_local_store():
+        _local_wear_log.setdefault(user_id, []).append(entry)
+        wardrobe = _local_wardrobes.get(user_id, [])
+        _local_wardrobes[user_id] = [
+            g.model_copy(update={
+                "times_worn": g.times_worn + 1,
+                "last_worn_date": worn_date if (g.last_worn_date is None or worn_date > g.last_worn_date) else g.last_worn_date,
+                "updated_at": now,
+            }) if g.id == garment_id else g
+            for g in wardrobe
+        ]
+        return entry
+
+    try:
+        client = get_supabase_client()
+        client.table(_wear_log_table()).insert({
+            "id": entry.id,
+            "user_id": user_id,
+            "garment_id": garment_id,
+            "worn_date": worn_date.isoformat(),
+        }).execute()
+        # Update denormalized fields on the garment row.
+        result = (
+            client.table(_table_name())
+            .select("times_worn, last_worn_date")
+            .eq("id", garment_id)
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        current = result.data or {}
+        new_times = int(current.get("times_worn") or 0) + 1
+        existing_last = _parse_date(current.get("last_worn_date"))
+        new_last = worn_date if (existing_last is None or worn_date > existing_last) else existing_last
+        client.table(_table_name()).update({
+            "times_worn": new_times,
+            "last_worn_date": new_last.isoformat(),
+            "updated_at": now.isoformat(),
+        }).eq("id", garment_id).eq("user_id", user_id).execute()
+        return entry
+    except Exception:
+        logger.exception("log_wear_event failed garment_id=%s", garment_id)
+        return None
+
+
+def set_laundry_status(user_id: str, garment_id: str, status: LaundryStatus) -> Optional[GarmentItem]:
+    """Update the laundry status for a single garment. Returns the updated garment."""
+    now = datetime.utcnow()
+    if _use_local_store():
+        wardrobe = _local_wardrobes.get(user_id, [])
+        updated: Optional[GarmentItem] = None
+        new_wardrobe = []
+        for g in wardrobe:
+            if g.id == garment_id:
+                updated = g.model_copy(update={"laundry_status": status, "updated_at": now})
+                new_wardrobe.append(updated)
+            else:
+                new_wardrobe.append(g)
+        _local_wardrobes[user_id] = new_wardrobe
+        return updated
+
+    try:
+        result = (
+            get_supabase_client()
+            .table(_table_name())
+            .update({"laundry_status": status.value, "updated_at": now.isoformat()})
+            .eq("id", garment_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = result.data or []
+        return _row_to_garment(rows[0]) if rows else None
+    except Exception:
+        logger.exception("set_laundry_status failed garment_id=%s", garment_id)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Wear / outfit history queries
+# ---------------------------------------------------------------------------
+
+
+def get_wear_history(user_id: str, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[WearLogEntry]:
+    """Return wear log entries for *user_id*, optionally filtered by date range."""
+    if _use_local_store():
+        entries = _local_wear_log.get(user_id, [])
+        if start_date:
+            entries = [e for e in entries if e.worn_date >= start_date]
+        if end_date:
+            entries = [e for e in entries if e.worn_date <= end_date]
+        return sorted(entries, key=lambda e: e.worn_date, reverse=True)
+
+    try:
+        query = (
+            get_supabase_client()
+            .table(_wear_log_table())
+            .select("*")
+            .eq("user_id", user_id)
+            .order("worn_date", desc=True)
+        )
+        if start_date:
+            query = query.gte("worn_date", start_date.isoformat())
+        if end_date:
+            query = query.lte("worn_date", end_date.isoformat())
+        result = query.execute()
+        return [
+            WearLogEntry(
+                id=str(r["id"]),
+                user_id=str(r["user_id"]),
+                garment_id=str(r["garment_id"]),
+                worn_date=_parse_date(r["worn_date"]) or date.today(),
+                created_at=_parse_datetime(r.get("created_at")),
+            )
+            for r in (result.data or [])
+        ]
+    except Exception:
+        logger.exception("get_wear_history failed user_id=%s", user_id)
+        return []
+
+
+def log_outfit(user_id: str, worn_date: date, garment_ids: List[str], event_type: Optional[str] = None, notes: Optional[str] = None) -> Optional[OutfitLogEntry]:
+    """Record a full outfit for a given date."""
+    now = datetime.utcnow()
+    entry = OutfitLogEntry(
+        id=str(uuid.uuid4()),
+        user_id=user_id,
+        worn_date=worn_date,
+        garment_ids=garment_ids,
+        event_type=event_type,
+        notes=notes,
+        created_at=now,
+    )
+
+    if _use_local_store():
+        _local_outfit_log.setdefault(user_id, []).append(entry)
+        return entry
+
+    try:
+        get_supabase_client().table(_outfit_log_table()).insert({
+            "id": entry.id,
+            "user_id": user_id,
+            "worn_date": worn_date.isoformat(),
+            "garment_ids": garment_ids,
+            "event_type": event_type,
+            "notes": notes,
+        }).execute()
+        return entry
+    except Exception:
+        logger.exception("log_outfit failed user_id=%s", user_id)
+        return None
+
+
+def get_outfit_log(user_id: str, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[OutfitLogEntry]:
+    """Return outfit log entries for *user_id*, optionally filtered by date range."""
+    if _use_local_store():
+        entries = _local_outfit_log.get(user_id, [])
+        if start_date:
+            entries = [e for e in entries if e.worn_date >= start_date]
+        if end_date:
+            entries = [e for e in entries if e.worn_date <= end_date]
+        return sorted(entries, key=lambda e: e.worn_date, reverse=True)
+
+    try:
+        query = (
+            get_supabase_client()
+            .table(_outfit_log_table())
+            .select("*")
+            .eq("user_id", user_id)
+            .order("worn_date", desc=True)
+        )
+        if start_date:
+            query = query.gte("worn_date", start_date.isoformat())
+        if end_date:
+            query = query.lte("worn_date", end_date.isoformat())
+        result = query.execute()
+        return [
+            OutfitLogEntry(
+                id=str(r["id"]),
+                user_id=str(r["user_id"]),
+                worn_date=_parse_date(r["worn_date"]) or date.today(),
+                garment_ids=r.get("garment_ids") or [],
+                event_type=r.get("event_type"),
+                notes=r.get("notes"),
+                created_at=_parse_datetime(r.get("created_at")),
+            )
+            for r in (result.data or [])
+        ]
+    except Exception:
+        logger.exception("get_outfit_log failed user_id=%s", user_id)
+        return []
+
+
+def get_garment_insights(user_id: str) -> GarmentInsights:
+    """Compute aggregated usage stats for the user's wardrobe."""
+    wardrobe = get_wardrobe(user_id)
+    total_items = len(wardrobe)
+    total_wears = sum(g.times_worn for g in wardrobe)
+
+    sorted_by_worn = sorted(wardrobe, key=lambda g: g.times_worn, reverse=True)
+    most_worn = [
+        {"garment_id": g.id, "times_worn": g.times_worn}
+        for g in sorted_by_worn[:5]
+        if g.times_worn > 0
+    ]
+
+    cutoff = date.today() - timedelta(days=30)
+    not_worn_recently = [
+        g.id for g in wardrobe
+        if g.last_worn_date is None or g.last_worn_date < cutoff
+    ]
+
+    return GarmentInsights(
+        most_worn=most_worn,
+        not_worn_recently=not_worn_recently,
+        total_items=total_items,
+        total_wears=total_wears,
+    )

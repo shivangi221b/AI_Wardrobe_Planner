@@ -11,10 +11,16 @@ fields for those are accepted by the models but ignored here.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Optional
 
 from .llm import generate_outfit_explanation
-from .models import BodyMeasurements, DayOutfitSuggestion, GarmentItem, UserProfile, WeekEvent
+from .models import BodyMeasurements, DayOutfitSuggestion, GarmentItem, LaundryStatus, UserProfile, WeekEvent
+
+_RECENCY_PENALTY_DAYS = 3
+_RECENCY_PENALTY_VALUE = 50
+_NEGLECTED_BOOST_DAYS = 14
+_NEGLECTED_BOOST_VALUE = -2
 
 # ---------------------------------------------------------------------------
 # Category sets — checked against both category.value and sub_category
@@ -359,8 +365,22 @@ def _pick_garment(
     # compute the score once.
     color_scores: dict[str, float] = {g.id: ctx.score(g) for g in candidates}
 
-    # Primary sort: variety (times_recommended asc); tiebreak: colour score desc.
-    candidates.sort(key=lambda g: (g.times_recommended, -color_scores[g.id]))
+    today = date.today()
+    recency_cutoff = today - timedelta(days=_RECENCY_PENALTY_DAYS)
+    neglected_cutoff = today - timedelta(days=_NEGLECTED_BOOST_DAYS)
+
+    def _recency_modifier(g: GarmentItem) -> int:
+        if g.last_worn_date is not None and g.last_worn_date >= recency_cutoff:
+            return _RECENCY_PENALTY_VALUE
+        if g.last_worn_date is not None and g.last_worn_date < neglected_cutoff:
+            return _NEGLECTED_BOOST_VALUE
+        if g.last_worn_date is None:
+            return _NEGLECTED_BOOST_VALUE
+        return 0
+
+    # Primary sort: variety (times_recommended + recency modifier asc);
+    # tiebreak: colour score desc.
+    candidates.sort(key=lambda g: (g.times_recommended + _recency_modifier(g), -color_scores[g.id]))
 
     def formality_matches(g: GarmentItem, tier: frozenset[str]) -> bool:
         return g.formality is not None and g.formality.value in tier
@@ -437,6 +457,7 @@ async def generate_week_recommendations(
     user_gender: Optional[str] = None,
     measurements: Optional[BodyMeasurements] = None,
     user_profile: Optional[UserProfile] = None,
+    include_laundry: bool = False,
 ) -> list[DayOutfitSuggestion]:
     """
     Generate one :class:`DayOutfitSuggestion` per event in *events*.
@@ -445,20 +466,26 @@ async def generate_week_recommendations(
     LLM (with garment images forwarded when available).
 
     Args:
-        wardrobe:      All garments belonging to the user. May be empty.
-        events:        The user's week plan. Each entry describes one day.
-        user_gender:   Optional gender string (``"male"``, ``"female"``, ``"other"``).
-                       When set, garments tagged for the opposite binary gender are
-                       excluded before selection begins.
-        measurements:  Optional body measurements used for soft size-band scoring.
-        user_profile:  Optional extended style profile used for colour preference
-                       scoring (favourite/avoided colours and colour tone).
+        wardrobe:        All garments belonging to the user. May be empty.
+        events:          The user's week plan. Each entry describes one day.
+        user_gender:     Optional gender string (``"male"``, ``"female"``, ``"other"``).
+                         When set, garments tagged for the opposite binary gender are
+                         excluded before selection begins.
+        measurements:    Optional body measurements used for soft size-band scoring.
+        user_profile:    Optional extended style profile used for colour preference
+                         scoring (favourite/avoided colours and colour tone).
+        include_laundry: When False (default), items with ``laundry_status == in_laundry``
+                         are excluded from recommendations.
 
     Returns:
         A list of :class:`DayOutfitSuggestion` objects in the same order as
         *events*.  Never raises — edge cases (empty wardrobe, unknown event
         type, missing category, LLM failure) produce graceful responses.
     """
+    # --- 0. Laundry pre-filter ---
+    if not include_laundry:
+        wardrobe = [g for g in wardrobe if g.laundry_status != LaundryStatus.IN_LAUNDRY]
+
     # --- 1. Gender pre-filter ---
     if user_gender:
         # Map user-facing gender strings to the garment gender enum values.
