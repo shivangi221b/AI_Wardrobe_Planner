@@ -848,3 +848,65 @@ def store_avatar_image(user_id: str, image_bytes: bytes) -> str:
     except Exception:
         logger.exception("store_avatar_image failed user_id=%s", user_id)
         raise
+
+
+def get_outfit_preview_url(user_id: str, outfit_id: str) -> str | None:
+    """
+    Return the public URL of an already-generated outfit preview, or ``None``
+    if no preview has been stored for this ``(user_id, outfit_id)`` pair yet.
+    """
+    safe_uid = re.sub(r"[^A-Za-z0-9_\-]", "_", user_id)[:128]
+    safe_oid = re.sub(r"[^A-Za-z0-9_\-]", "_", outfit_id)[:128]
+
+    if _use_local_store():
+        dest = _LOCAL_AVATARS_DIR / "outfit-previews" / safe_uid / f"{safe_oid}.jpg"
+        if dest.exists():
+            return f"/assets/local-avatars/outfit-previews/{safe_uid}/{safe_oid}.jpg"
+        return None
+
+    storage_path = f"{safe_uid}/outfit-previews/{safe_oid}.jpg"
+    bucket = _AVATAR_BUCKET()
+    try:
+        client = get_supabase_client()
+        # A lightweight existence check — list with a prefix filter.
+        result = client.storage.from_(bucket).list(path=f"{safe_uid}/outfit-previews")
+        names = [obj.get("name", "") for obj in (result or [])]
+        if f"{safe_oid}.jpg" in names:
+            return str(client.storage.from_(bucket).get_public_url(storage_path))
+    except Exception:
+        logger.debug("get_outfit_preview_url: check failed, will regenerate")
+    return None
+
+
+def store_outfit_preview_image(user_id: str, outfit_id: str, image_bytes: bytes) -> str:
+    """
+    Persist a generated outfit-on-avatar JPEG at a deterministic path keyed by
+    ``(user_id, outfit_id)`` and return its public URL.
+
+    Local mode  → ``outputs/local_avatars/outfit-previews/{user_id}/{outfit_id}.jpg``
+    Supabase    → ``{user_id}/outfit-previews/{outfit_id}.jpg`` in the avatar bucket.
+    """
+    safe_uid = re.sub(r"[^A-Za-z0-9_\-]", "_", user_id)[:128]
+    safe_oid = re.sub(r"[^A-Za-z0-9_\-]", "_", outfit_id)[:128]
+
+    if _use_local_store():
+        dest_dir = _LOCAL_AVATARS_DIR / "outfit-previews" / safe_uid
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{safe_oid}.jpg"
+        dest.write_bytes(image_bytes)
+        return f"/assets/local-avatars/outfit-previews/{safe_uid}/{safe_oid}.jpg"
+
+    storage_path = f"{safe_uid}/outfit-previews/{safe_oid}.jpg"
+    bucket = _AVATAR_BUCKET()
+    try:
+        client = get_supabase_client()
+        client.storage.from_(bucket).upload(
+            path=storage_path,
+            file=image_bytes,
+            file_options={"content-type": "image/jpeg", "upsert": "true"},
+        )
+        url_resp = client.storage.from_(bucket).get_public_url(storage_path)
+        return str(url_resp)
+    except Exception:
+        logger.exception("store_outfit_preview_image failed user_id=%s outfit_id=%s", user_id, outfit_id)
+        raise

@@ -17,7 +17,13 @@ from pydantic import BaseModel
 from PIL import Image
 
 from ..avatar_gen import generate_avatar_image
-from ..db import get_user_profile, store_avatar_image, upsert_user_profile
+from ..db import (
+    get_outfit_preview_url,
+    get_user_profile,
+    store_avatar_image,
+    store_outfit_preview_image,
+    upsert_user_profile,
+)
 from ..models import AvatarConfig
 
 logger = logging.getLogger(__name__)
@@ -42,6 +48,17 @@ _PIL_FORMAT_TO_MIME: dict[str, str] = {
 
 class AvatarGenerateResponse(BaseModel):
     avatar_image_url: str
+
+
+class OutfitPreviewRequest(BaseModel):
+    outfit_description: str
+    """Human-readable description of the outfit, e.g. 'navy blazer, white shirt, grey chinos'."""
+    outfit_id: str
+    """Stable ID used as the cache key — typically ``DayRecommendation.outfit.id``."""
+
+
+class OutfitPreviewResponse(BaseModel):
+    preview_image_url: str
 
 
 def _trusted_mime_from_image_bytes(data: bytes) -> str:
@@ -146,3 +163,74 @@ async def generate_avatar(
 
     logger.info("avatar_router: avatar saved url=%s", avatar_url)
     return AvatarGenerateResponse(avatar_image_url=avatar_url)
+
+
+@router.post("/{user_id}/outfit-preview/generate", response_model=OutfitPreviewResponse)
+async def generate_outfit_preview(
+    user_id: str,
+    body: OutfitPreviewRequest,
+) -> OutfitPreviewResponse:
+    """
+    Generate (or return a cached) full-body avatar illustration wearing a specific outfit.
+
+    **Flow**
+
+    1. Check whether a preview for this ``(user_id, outfit_id)`` pair is already stored —
+       return it immediately if so (no AI call).
+    2. Load the user profile to obtain avatar config, colour tone, and gender.
+    3. Call ``generate_avatar_image`` with ``outfit_description`` (no selfie required —
+       the Gemini face-analysis step is skipped; the prompt is built from stored config).
+    4. Store the JPEG at a deterministic path keyed by ``outfit_id`` and return the URL.
+
+    The raw selfie is never involved — this endpoint only uses the stored avatar
+    configuration to personalise the illustration.
+    """
+    if not body.outfit_description.strip():
+        raise HTTPException(status_code=422, detail="outfit_description must not be empty.")
+    if not body.outfit_id.strip():
+        raise HTTPException(status_code=422, detail="outfit_id must not be empty.")
+
+    # Return the cached preview if it already exists.
+    cached_url = get_outfit_preview_url(user_id, body.outfit_id)
+    if cached_url:
+        logger.info(
+            "avatar_router: outfit preview cache hit user_id=%s outfit_id=%s",
+            user_id,
+            body.outfit_id,
+        )
+        return OutfitPreviewResponse(preview_image_url=cached_url)
+
+    profile = get_user_profile(user_id)
+    avatar_config: AvatarConfig = (
+        profile.avatar_config if profile and profile.avatar_config else AvatarConfig()
+    )
+    color_tone: str | None = profile.color_tone if profile else None
+    profile_gender: str | None = profile.gender if profile else None
+
+    logger.info(
+        "avatar_router: generating outfit preview user_id=%s outfit_id=%s",
+        user_id,
+        body.outfit_id,
+    )
+    try:
+        jpeg_bytes = await generate_avatar_image(
+            selfie_bytes=None,
+            avatar_config=avatar_config,
+            color_tone=color_tone,
+            gender=profile_gender,
+            outfit_description=body.outfit_description,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        logger.exception("outfit preview generation failed for user_id=%s", user_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    try:
+        preview_url = store_outfit_preview_image(user_id, body.outfit_id, jpeg_bytes)
+    except Exception:
+        logger.exception("outfit preview storage failed user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail="Failed to store the generated outfit preview.") from None
+
+    logger.info("avatar_router: outfit preview saved url=%s", preview_url)
+    return OutfitPreviewResponse(preview_image_url=preview_url)

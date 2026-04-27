@@ -1262,6 +1262,55 @@ export async function generateAvatar(
 }
 
 // ---------------------------------------------------------------------------
+// Outfit preview generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate (or retrieve a cached) full-body avatar illustration wearing the
+ * specified outfit. The server caches by ``outfitId`` so repeated calls for the
+ * same outfit return the stored image instantly.
+ *
+ * @param userId            Authenticated user id.
+ * @param outfitId          Stable outfit id (``DayRecommendation.outfit.id``).
+ * @param outfitDescription Human-readable outfit description built from garment names/colours.
+ * @returns                 The public URL of the generated preview image.
+ */
+export async function generateOutfitPreview(
+  userId: string,
+  outfitId: string,
+  outfitDescription: string,
+): Promise<string> {
+  if (USE_MOCK_API) {
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(outfitId)}&size=512&background=1b1b19&color=f4f4f2&rounded=true`;
+  }
+
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/outfit-preview/generate`,
+    {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outfit_id: outfitId, outfit_description: outfitDescription }),
+    }
+  );
+
+  const rawBody = await response.text();
+  if (!response.ok) {
+    throw new ApiError(
+      `Outfit preview generation failed: ${response.status} ${response.statusText}`,
+      response.status,
+      rawBody
+    );
+  }
+
+  const data = JSON.parse(rawBody) as { preview_image_url?: string };
+  const url = (data.preview_image_url || '').trim();
+  if (!url) {
+    throw new ApiError('Invalid outfit preview response: missing preview_image_url', 502, rawBody);
+  }
+  return url;
+}
+
+// ---------------------------------------------------------------------------
 // Hide / unhide garment
 // ---------------------------------------------------------------------------
 
