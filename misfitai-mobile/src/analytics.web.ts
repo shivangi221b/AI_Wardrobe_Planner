@@ -29,3 +29,23 @@ export function trackAuthSuccess(provider: string): void {
     label: provider,
   });
 }
+
+export function trackOutfitAvatarPreviewOpen(day: string, eventType: string): void {
+  if (!measurementId) return;
+  if (!initialized) initAnalytics();
+  ReactGA.event({
+    category: 'outfit',
+    action: 'avatar_preview_open',
+    label: `${day}:${eventType}`,
+  });
+}
+
+export function trackOutfitAccepted(day: string, eventType: string): void {
+  if (!measurementId) return;
+  if (!initialized) initAnalytics();
+  ReactGA.event({
+    category: 'outfit',
+    action: 'accepted',
+    label: `${day}:${eventType}`,
+  });
+}

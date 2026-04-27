@@ -1262,6 +1262,74 @@ export async function generateAvatar(
 }
 
 // ---------------------------------------------------------------------------
+// Outfit preview generation
+// ---------------------------------------------------------------------------
+
+export interface OutfitPreviewGarment {
+  url: string;
+  name: string;
+  category: string;
+}
+
+/**
+ * Build (or retrieve a cached) outfit preview showing the user's avatar wearing
+ * the recommended outfit items.
+ *
+ * The server first attempts AI generation (Imagen / Gemini multimodal); PIL
+ * side-by-side compositing is used as a deterministic fallback if AI is
+ * unavailable or returns no image.
+ *
+ * @param userId          Authenticated user id.
+ * @param outfitId        Stable outfit id used as the server-side cache key.
+ * @param avatarImageUrl  Resolved public URL of the user's avatar portrait.
+ * @param garmentImages   Ordered garment images (outerwear → top → bottom → shoes).
+ * @returns               The public URL of the generated or composited preview image.
+ */
+export async function generateOutfitPreview(
+  userId: string,
+  outfitId: string,
+  avatarImageUrl: string,
+  garmentImages: OutfitPreviewGarment[],
+): Promise<string> {
+  if (USE_MOCK_API) {
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(outfitId)}&size=512&background=1b1b19&color=f4f4f2&rounded=true`;
+  }
+
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/outfit-preview/generate`,
+    {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        outfit_id: outfitId,
+        avatar_image_url: avatarImageUrl,
+        garment_images: garmentImages.map((g) => ({
+          url: g.url,
+          name: g.name,
+          category: g.category,
+        })),
+      }),
+    }
+  );
+
+  const rawBody = await response.text();
+  if (!response.ok) {
+    throw new ApiError(
+      `Outfit preview generation failed: ${response.status} ${response.statusText}`,
+      response.status,
+      rawBody
+    );
+  }
+
+  const data = JSON.parse(rawBody) as { preview_image_url?: string };
+  const url = (data.preview_image_url || '').trim();
+  if (!url) {
+    throw new ApiError('Invalid outfit preview response: missing preview_image_url', 502, rawBody);
+  }
+  return url;
+}
+
+// ---------------------------------------------------------------------------
 // Hide / unhide garment
 // ---------------------------------------------------------------------------
 

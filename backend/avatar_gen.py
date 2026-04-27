@@ -236,18 +236,31 @@ def _build_avatar_prompt(
     avatar_config: Optional[AvatarConfig],
     color_tone: Optional[str],
     gender: Optional[str] = None,
+    outfit_description: Optional[str] = None,
 ) -> str:
     """
     Assemble a Imagen-safe prompt for a stylised portrait illustration.
 
     The prompt explicitly requests an *illustration* (not a photograph) so
     Imagen's real-person content policy is not triggered.
+
+    When ``outfit_description`` is provided the prompt shifts to a full-body
+    illustration showing the character wearing that outfit.
     """
     cfg = avatar_config or AvatarConfig()
 
+    if outfit_description:
+        # Full-body framing so the outfit is visible
+        subject_line = _primary_subject_line(gender).replace(
+            "head-and-shoulders portrait",
+            "full-body illustrated portrait",
+        )
+    else:
+        subject_line = _primary_subject_line(gender)
+
     # Put the Gemini face description immediately after the subject line so T2I models
     # weight it heavily (and so truncation, if any, drops style boilerplate last).
-    lines: list[str] = [_primary_subject_line(gender)]
+    lines: list[str] = [subject_line]
 
     if facial_description:
         lines.append(
@@ -277,14 +290,26 @@ def _build_avatar_prompt(
     elif cfg.hair_color:
         lines.append(f"User hair colour preference: {cfg.hair_color.replace('_', ' ')}.")
     if cfg.body_type:
-        lines.append(f"Body type for shoulders and neck: {cfg.body_type} build.")
+        lines.append(f"Body type: {cfg.body_type} build.")
 
     tone = (color_tone or "").strip().lower()
     if tone in ("warm", "cool", "neutral"):
         lines.append(f"Overall colour palette: {tone} tones.")
 
+    if outfit_description:
+        lines.append(
+            f"The character is wearing the following outfit — render each garment clearly and accurately: {outfit_description}."
+        )
+        lines.append(
+            "Show the complete outfit from head to toe. Clothing details must be prominent and recognisable."
+        )
+
     lines.append(_anti_stock_clause(gender))
-    lines.append("Square crop, centred composition, single face only.")
+
+    if outfit_description:
+        lines.append("Full-body upright pose, plain off-white background, single character only.")
+    else:
+        lines.append("Square crop, centred composition, single face only.")
 
     return " ".join(lines)
 
@@ -294,22 +319,28 @@ def _build_avatar_prompt(
 # ---------------------------------------------------------------------------
 
 async def generate_avatar_image(
-    selfie_bytes: bytes,
-    selfie_mime: str,
+    selfie_bytes: Optional[bytes],
+    selfie_mime: str = "image/jpeg",
     avatar_config: Optional[AvatarConfig] = None,
     color_tone: Optional[str] = None,
     gender: Optional[str] = None,
+    outfit_description: Optional[str] = None,
 ) -> bytes:
     """
     Generate a stylised 2-D portrait avatar image and return JPEG bytes.
 
     Args:
-        selfie_bytes:  Raw image bytes of the user's selfie.
-        selfie_mime:   MIME type, e.g. ``"image/jpeg"`` or ``"image/png"``.
-        avatar_config: Structured avatar preferences (hair, skin tone, body type).
-        color_tone:    ``"warm"``, ``"cool"``, or ``"neutral"`` — from the user profile.
-        gender:        ``"male"``, ``"female"``, or ``"other"`` from the user profile — strongly
-                       influences portrait gender presentation so the output matches the user.
+        selfie_bytes:       Raw image bytes of the user's selfie.  May be ``None``
+                            when generating an outfit preview without a selfie (the
+                            Gemini facial-feature step is skipped in that case).
+        selfie_mime:        MIME type, e.g. ``"image/jpeg"`` or ``"image/png"``.
+        avatar_config:      Structured avatar preferences (hair, skin tone, body type).
+        color_tone:         ``"warm"``, ``"cool"``, or ``"neutral"`` — from the user profile.
+        gender:             ``"male"``, ``"female"``, or ``"other"`` from the user profile — strongly
+                            influences portrait gender presentation so the output matches the user.
+        outfit_description: Optional free-text description of the outfit to render on the
+                            avatar (e.g. ``"navy blazer, white shirt, grey chinos, brown oxfords"``).
+                            When set the prompt shifts to a full-body illustration.
 
     Returns:
         JPEG bytes of the generated portrait (square, 512 × 512 by default).
@@ -317,17 +348,30 @@ async def generate_avatar_image(
     Raises:
         RuntimeError: If both Gemini and the image-generation backend fail.
     """
-    if len(selfie_bytes) > _MAX_SELFIE_BYTES:
+    if selfie_bytes is not None and len(selfie_bytes) > _MAX_SELFIE_BYTES:
         raise ValueError(
             f"Selfie exceeds the {_MAX_SELFIE_BYTES // 1024 // 1024} MB size limit."
         )
 
-    # Step 1 — extract facial features via Gemini Vision (best-effort)
-    facial_description = await _describe_selfie(selfie_bytes, selfie_mime)
+    # Step 1 — extract facial features via Gemini Vision (best-effort, skipped for outfit previews)
+    facial_description: Optional[str] = None
+    if selfie_bytes:
+        facial_description = await _describe_selfie(selfie_bytes, selfie_mime)
 
     # Step 2 — build Imagen prompt
-    prompt = _build_avatar_prompt(facial_description, avatar_config, color_tone, gender=gender)
-    logger.info("avatar_gen: prompt length=%d gender=%r", len(prompt), gender)
+    prompt = _build_avatar_prompt(
+        facial_description,
+        avatar_config,
+        color_tone,
+        gender=gender,
+        outfit_description=outfit_description,
+    )
+    logger.info(
+        "avatar_gen: prompt length=%d gender=%r has_outfit=%r",
+        len(prompt),
+        gender,
+        outfit_description is not None,
+    )
     # Never log prompt text by default — it embeds the user's selfie-derived facial description (PII).
     if os.getenv("AVATAR_LOG_PROMPT_PREVIEW", "").strip().lower() in ("1", "true", "yes"):
         logger.info(
