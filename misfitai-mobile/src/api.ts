@@ -12,16 +12,41 @@ import type {
   GarmentFormality,
   GarmentGender,
   GarmentSeasonality,
+  ShopProductOption,
+  ShopSuggestionsResponse,
   UserProfile,
   UserProfileUpdate,
+  WardrobeGapSuggestion,
 } from './types';
 
 const DEFAULT_API_BASE_URL =
   Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000';
 
-export const API_BASE_URL = (
-  process.env.EXPO_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL
-).replace(/\/$/, '');
+/**
+ * Android emulator: ``127.0.0.1`` / ``localhost`` in ``.env`` points at the emulator, not the host.
+ * Rewrite to ``10.0.2.2`` so the same .env works on iOS simulator + web + Android emulator.
+ * Physical devices still need your machine's LAN IP in ``EXPO_PUBLIC_API_BASE_URL``.
+ */
+function normalizeApiBaseUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/$/, '');
+  const base = trimmed || DEFAULT_API_BASE_URL;
+  if (Platform.OS !== 'android') {
+    return base;
+  }
+  try {
+    const parsed = new URL(base.includes('://') ? base : `http://${base}`);
+    if (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') {
+      parsed.hostname = '10.0.2.2';
+      return parsed.toString().replace(/\/$/, '');
+    }
+  } catch {
+    /* keep base */
+  }
+  return base;
+}
+
+const fromEnvUrl = (process.env.EXPO_PUBLIC_API_BASE_URL ?? '').trim();
+export const API_BASE_URL = normalizeApiBaseUrl(fromEnvUrl || DEFAULT_API_BASE_URL);
 
 export const USE_MOCK_API =
   process.env.EXPO_PUBLIC_USE_MOCK_API === 'true'
@@ -213,11 +238,12 @@ interface RecommendationApi {
 
 export interface AddGarmentPayload {
   name: string;
-  category: 'top' | 'bottom' | 'shoes' | 'accessory';
+  category: GarmentCategory;
   color?: string;
   formality?: GarmentFormality;
   seasonality?: GarmentSeasonality;
   primaryImageUrl?: string;
+  brand?: string;
 }
 
 export interface VisionAddPayload {
@@ -253,7 +279,7 @@ export interface GarmentSearchOptions {
 }
 export interface ConfirmSearchAddPayload {
   name: string;
-  category: 'top' | 'bottom' | 'shoes' | 'accessory';
+  category: GarmentCategory;
   color?: string;
   formality?: GarmentFormality;
   seasonality?: GarmentSeasonality;
@@ -773,6 +799,7 @@ export async function addGarment(
         seasonality: payload.seasonality ?? 'all_season',
         primary_image_url:
           payload.primaryImageUrl ?? 'https://example.com/garment-placeholder.jpg',
+        brand: payload.brand ?? undefined,
       }),
     }
   );
@@ -1069,6 +1096,7 @@ interface ProfileApiResponse {
   color_tone?: string | null;
   favorite_colors?: string[];
   avoided_colors?: string[];
+  favorite_brands?: string[];
   shoe_size?: string | null;
   top_size?: string | null;
   bottom_size?: string | null;
@@ -1091,6 +1119,7 @@ function mapUserProfile(r: ProfileApiResponse): UserProfile {
     colorTone: (r.color_tone as UserProfile['colorTone']) ?? null,
     favoriteColors: r.favorite_colors ?? [],
     avoidedColors: r.avoided_colors ?? [],
+    favoriteBrands: r.favorite_brands ?? [],
     shoeSize: r.shoe_size ?? null,
     topSize: r.top_size ?? null,
     bottomSize: r.bottom_size ?? null,
@@ -1128,6 +1157,7 @@ export function profileUpdateToApiPayload(data: UserProfileUpdate): Record<strin
   if (data.colorTone !== undefined) payload.color_tone = data.colorTone;
   if (data.favoriteColors !== undefined) payload.favorite_colors = data.favoriteColors;
   if (data.avoidedColors !== undefined) payload.avoided_colors = data.avoidedColors;
+  if (data.favoriteBrands !== undefined) payload.favorite_brands = data.favoriteBrands;
   if (data.shoeSize !== undefined) payload.shoe_size = data.shoeSize;
   if (data.topSize !== undefined) payload.top_size = data.topSize;
   if (data.bottomSize !== undefined) payload.bottom_size = data.bottomSize;
@@ -1161,6 +1191,7 @@ export async function updateUserProfile(
       userId,
       favoriteColors: data.favoriteColors ?? [],
       avoidedColors: data.avoidedColors ?? [],
+      favoriteBrands: data.favoriteBrands ?? [],
       ...data,
     };
   }
@@ -1172,6 +1203,154 @@ export async function updateUserProfile(
     }
   );
   return mapUserProfile(response);
+}
+
+// ---------------------------------------------------------------------------
+// Shop — wardrobe gaps
+// ---------------------------------------------------------------------------
+
+interface ShopProductApi {
+  id: string;
+  title: string;
+  brand?: string | null;
+  price_display?: string | null;
+  image_url: string;
+  merchant_url: string;
+  affiliate_url?: string | null;
+}
+
+interface WardrobeGapApi {
+  gap_id: string;
+  title: string;
+  reason: string;
+  target_category: string;
+  target_formality?: string | null;
+  suggested_name: string;
+  products?: ShopProductApi[];
+}
+
+function mapShopProduct(p: ShopProductApi): ShopProductOption {
+  return {
+    id: p.id,
+    title: p.title,
+    brand: p.brand,
+    priceDisplay: p.price_display,
+    imageUrl: p.image_url,
+    merchantUrl: p.merchant_url,
+    affiliateUrl: p.affiliate_url,
+  };
+}
+
+function mapWardrobeGap(g: WardrobeGapApi): WardrobeGapSuggestion {
+  return {
+    gapId: g.gap_id,
+    title: g.title,
+    reason: g.reason,
+    targetCategory: normalizeCategory(g.target_category),
+    targetFormality: g.target_formality
+      ? (normalizeFormality(g.target_formality) as GarmentFormality)
+      : null,
+    suggestedName: g.suggested_name,
+    products: Array.isArray(g.products) ? g.products.map(mapShopProduct) : [],
+  };
+}
+
+export async function getShopSuggestions(userId: string): Promise<ShopSuggestionsResponse> {
+  if (USE_MOCK_API) {
+    return {
+      userId,
+      gaps: [
+        {
+          gapId: 'neutral_shoes',
+          title: 'Neutral everyday shoes (mock)',
+          reason:
+            'Mock API mode is on. Set EXPO_PUBLIC_USE_MOCK_API=false in misfitai-mobile/.env and restart Expo with -c to use your backend.',
+          targetCategory: 'shoes',
+          targetFormality: 'smart_casual',
+          suggestedName: 'White sneakers',
+          products: [
+            {
+              id: 'mock-1',
+              title: 'Example sneaker',
+              brand: 'Demo',
+              priceDisplay: '$0',
+              imageUrl: 'https://via.placeholder.com/320x320.png?text=Mock+product',
+              merchantUrl: 'https://example.com',
+            },
+          ],
+        },
+      ],
+    };
+  }
+  const r = await requestJson<{ user_id?: string; gaps?: WardrobeGapApi[] }>(
+    `/users/${encodeURIComponent(userId)}/shop/suggestions`
+  );
+  const gaps = Array.isArray(r.gaps) ? r.gaps.map(mapWardrobeGap) : [];
+  return { userId: r.user_id ?? userId, gaps };
+}
+
+export async function postShopEvent(
+  userId: string,
+  payload: { gapId: string; eventType: string; productId?: string | null }
+): Promise<void> {
+  if (USE_MOCK_API) return;
+  await requestJson(`/users/${encodeURIComponent(userId)}/shop/events`, {
+    method: 'POST',
+    body: JSON.stringify({
+      gap_id: payload.gapId,
+      event_type: payload.eventType,
+      product_id: payload.productId ?? undefined,
+    }),
+  });
+}
+
+export async function markShopPurchased(
+  userId: string,
+  payload: {
+    gapId: string;
+    suggestedName: string;
+    title: string;
+    primaryImageUrl: string;
+    category: GarmentCategory;
+    formality?: GarmentFormality | null;
+    seasonality?: GarmentSeasonality | null;
+    color?: string | null;
+    brand?: string | null;
+    productId?: string | null;
+    merchantUrl?: string | null;
+  }
+): Promise<Garment> {
+  if (USE_MOCK_API) {
+    return mockAddGarment(userId, {
+      name: payload.suggestedName,
+      category: payload.category,
+      color: payload.color ?? undefined,
+      formality: payload.formality ?? undefined,
+      seasonality: payload.seasonality ?? undefined,
+      primaryImageUrl: payload.primaryImageUrl,
+      brand: payload.brand ?? undefined,
+    });
+  }
+  const raw = await requestJson<WardrobeApiItem>(
+    `/users/${encodeURIComponent(userId)}/shop/mark-purchased`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        gap_id: payload.gapId,
+        suggested_name: payload.suggestedName,
+        title: payload.title,
+        primary_image_url: payload.primaryImageUrl,
+        category: payload.category,
+        formality: payload.formality ?? undefined,
+        seasonality: payload.seasonality ?? undefined,
+        color: payload.color ?? undefined,
+        brand: payload.brand ?? undefined,
+        product_id: payload.productId ?? undefined,
+        merchant_url: payload.merchantUrl ?? undefined,
+      }),
+    }
+  );
+  return mapGarment(raw);
 }
 
 // ---------------------------------------------------------------------------

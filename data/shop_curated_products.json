@@ -1,0 +1,63 @@
+{
+  "formal_shoes_work": [
+    {
+      "title": "Leather penny loafers",
+      "link": "https://example.com/products/loafers",
+      "thumbnail": "https://via.placeholder.com/320x320.png?text=Loafers",
+      "source": "Example Retailer",
+      "extracted_price": "$98"
+    },
+    {
+      "title": "Cap-toe Oxford shoes",
+      "link": "https://example.com/products/oxfords",
+      "thumbnail": "https://via.placeholder.com/320x320.png?text=Oxfords",
+      "source": "Example Retailer",
+      "extracted_price": "$145"
+    }
+  ],
+  "neutral_shoes": [
+    {
+      "title": "Minimal white sneakers",
+      "link": "https://example.com/products/white-sneakers",
+      "thumbnail": "https://via.placeholder.com/320x320.png?text=Sneakers",
+      "source": "Example Retailer",
+      "extracted_price": "$85"
+    }
+  ],
+  "outerwear_layer": [
+    {
+      "title": "Wool blend overcoat",
+      "link": "https://example.com/products/overcoat",
+      "thumbnail": "https://via.placeholder.com/320x320.png?text=Coat",
+      "source": "Example Retailer",
+      "extracted_price": "$198"
+    }
+  ],
+  "work_layering_blazer": [
+    {
+      "title": "Single-breasted navy blazer",
+      "link": "https://example.com/products/blazer",
+      "thumbnail": "https://via.placeholder.com/320x320.png?text=Blazer",
+      "source": "Example Retailer",
+      "extracted_price": "$128"
+    }
+  ],
+  "accessories_versatile": [
+    {
+      "title": "Medium gold hoop earrings",
+      "link": "https://example.com/products/hoops",
+      "thumbnail": "https://via.placeholder.com/320x320.png?text=Hoops",
+      "source": "Example Retailer",
+      "extracted_price": "$32"
+    }
+  ],
+  "neutral_bottom": [
+    {
+      "title": "High-rise black trousers",
+      "link": "https://example.com/products/trousers",
+      "thumbnail": "https://via.placeholder.com/320x320.png?text=Trousers",
+      "source": "Example Retailer",
+      "extracted_price": "$79"
+    }
+  ]
+}

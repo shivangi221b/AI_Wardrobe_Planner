@@ -35,7 +35,7 @@ from .models import (
     MediaType,
     WeekEvent,
 )
-from .routers import analytics_router, auth_router, recommendations, weather_router, calendar_router, profile_router, avatar_router
+from .routers import analytics_router, auth_router, recommendations, weather_router, calendar_router, profile_router, avatar_router, shop_router
 from .routers.analytics_router import public_metrics_router
 from .storage import get_wardrobe, get_week_events as _storage_get_week_events, store_week_events
 
@@ -50,7 +50,7 @@ app = FastAPI(title="AI Wardrobe Planner API", version="0.1.0")
 # Example: ALLOWED_ORIGINS="https://app.misfitai.com,https://staging.misfitai.com"
 _raw_origins = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:8081,http://127.0.0.1:8081,http://localhost:3000",
+    "http://localhost:8081,http://127.0.0.1:8081,http://[::1]:8081,http://localhost:3000,http://localhost:19006,http://127.0.0.1:19006",
 )
 _allowed_origins: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
@@ -78,6 +78,7 @@ app.include_router(analytics_router.router)
 app.include_router(public_metrics_router)
 app.include_router(profile_router.router)
 app.include_router(avatar_router.router)
+app.include_router(shop_router.router)
 
 _local_assets_dir = Path(os.getenv("LOCAL_GARMENTS_DIR", "outputs/local_garments"))
 _local_assets_dir.mkdir(parents=True, exist_ok=True)
@@ -115,6 +116,7 @@ class AddGarmentRequest(BaseModel):
     seasonality: Optional[GarmentSeasonality] = None
     primary_image_url: HttpUrl
     gender: Optional[GarmentGender] = None
+    brand: Optional[str] = None
 
 
 class SearchGarmentRequest(BaseModel):
@@ -275,6 +277,7 @@ def add_wardrobe_item(user_id: str, request: AddGarmentRequest) -> GarmentItem:
         formality=formality,
         seasonality=seasonality,
         gender=request.gender,
+        brand=(request.brand or "").strip() or None,
         tags=tags,
         created_at=now,
         updated_at=now,

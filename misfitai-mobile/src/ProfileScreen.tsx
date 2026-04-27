@@ -383,6 +383,7 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
   const [colorTone, setColorTone] = useState<ColorTone | null>(null);
   const [favoriteColors, setFavoriteColors] = useState<string[]>([]);
   const [avoidedColors, setAvoidedColors] = useState<string[]>([]);
+  const [favoriteBrandsText, setFavoriteBrandsText] = useState('');
   const [styleDirty, setStyleDirty] = useState(false);
   const [styleSaving, setStyleSaving] = useState(false);
 
@@ -413,6 +414,7 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
           setColorTone(p.colorTone ?? null);
           setFavoriteColors(p.favoriteColors ?? []);
           setAvoidedColors(p.avoidedColors ?? []);
+          setFavoriteBrandsText((p.favoriteBrands ?? []).join(', '));
           setTopSize(p.topSize ?? null);
           setBottomSize(p.bottomSize ?? null);
           setShoeSize(p.shoeSize ?? '');
@@ -482,11 +484,17 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
   const saveStyle = useCallback(async () => {
     setStyleSaving(true);
     try {
+      const favoriteBrands = favoriteBrandsText
+        .split(/[,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(0, 12);
       const updated = await updateUserProfile(userId, {
         skinTone,
         colorTone,
         favoriteColors,
         avoidedColors,
+        favoriteBrands,
       });
       setProfile(updated);
       setStyleDirty(false);
@@ -495,7 +503,7 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
     } finally {
       setStyleSaving(false);
     }
-  }, [userId, skinTone, colorTone, favoriteColors, avoidedColors]);
+  }, [userId, skinTone, colorTone, favoriteColors, avoidedColors, favoriteBrandsText]);
 
   const saveSizes = useCallback(async () => {
     setSizesSaving(true);
@@ -623,6 +631,7 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
     setColorTone(profile?.colorTone ?? null);
     setFavoriteColors(profile?.favoriteColors ?? []);
     setAvoidedColors(profile?.avoidedColors ?? []);
+    setFavoriteBrandsText((profile?.favoriteBrands ?? []).join(', '));
     setStyleDirty(false);
   };
   const discardSizes = () => {
@@ -759,6 +768,19 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
               setAvoidedColors(next);
               setStyleDirty(true);
             }}
+          />
+
+          <Text style={[s.label, { marginTop: 16 }]}>Favourite brands (optional)</Text>
+          <Text style={s.hint}>Comma-separated — used to personalise shop search.</Text>
+          <TextInput
+            value={favoriteBrandsText}
+            onChangeText={(v) => {
+              setFavoriteBrandsText(v);
+              setStyleDirty(true);
+            }}
+            placeholder="e.g. COS, Everlane, Nike"
+            placeholderTextColor={palette.muted}
+            style={s.input}
           />
         </View>
         <SaveBar dirty={styleDirty} saving={styleSaving} onSave={saveStyle} onDiscard={discardStyle} />

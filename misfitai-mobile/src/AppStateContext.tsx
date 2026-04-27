@@ -77,6 +77,7 @@ interface AppState {
   toggleGarmentHidden: (garmentId: string, hidden: boolean) => Promise<void>;
   deleteGarmentFromWardrobe: (garmentId: string) => Promise<void>;
   updateMeasurements: (data: Omit<BodyMeasurements, 'userId' | 'updatedAt'>) => Promise<void>;
+  refreshWardrobe: () => Promise<void>;
 }
 
 const AppStateContext = createContext<AppState | undefined>(undefined);
@@ -396,6 +397,11 @@ export function AppStateProvider({
     [userId]
   );
 
+  const refreshWardrobe = useCallback(async () => {
+    const wardrobe = await getWardrobe(userId);
+    setGarments(wardrobe);
+  }, [userId]);
+
   const value: AppState = useMemo(
     () => ({
       userId,
@@ -421,6 +427,7 @@ export function AppStateProvider({
       toggleGarmentHidden,
       deleteGarmentFromWardrobe,
       updateMeasurements,
+      refreshWardrobe,
     }),
     [
       userId,
@@ -446,6 +453,7 @@ export function AppStateProvider({
       toggleGarmentHidden,
       deleteGarmentFromWardrobe,
       updateMeasurements,
+      refreshWardrobe,
     ]
   );
 

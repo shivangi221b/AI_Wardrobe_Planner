@@ -113,6 +113,7 @@ export interface UserProfile {
   colorTone?: ColorTone | null;
   favoriteColors: string[];
   avoidedColors: string[];
+  favoriteBrands: string[];
   shoeSize?: string | null;
   topSize?: string | null;
   bottomSize?: string | null;
@@ -128,8 +129,38 @@ export interface UserProfileUpdate {
   colorTone?: ColorTone | null;
   favoriteColors?: string[];
   avoidedColors?: string[];
+  favoriteBrands?: string[];
   shoeSize?: string | null;
   topSize?: string | null;
   bottomSize?: string | null;
   avatarConfig?: AvatarConfig | null;
+}
+
+// ---------------------------------------------------------------------------
+// Shop — wardrobe gaps
+// ---------------------------------------------------------------------------
+
+export interface ShopProductOption {
+  id: string;
+  title: string;
+  brand?: string | null;
+  priceDisplay?: string | null;
+  imageUrl: string;
+  merchantUrl: string;
+  affiliateUrl?: string | null;
+}
+
+export interface WardrobeGapSuggestion {
+  gapId: string;
+  title: string;
+  reason: string;
+  targetCategory: GarmentCategory;
+  targetFormality?: GarmentFormality | null;
+  suggestedName: string;
+  products: ShopProductOption[];
+}
+
+export interface ShopSuggestionsResponse {
+  userId: string;
+  gaps: WardrobeGapSuggestion[];
 }

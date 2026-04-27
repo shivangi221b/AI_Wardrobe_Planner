@@ -199,6 +199,9 @@ class UserProfile(BaseModel):
     avoided_colors: List[str] = []
     """Colour names / hex codes the user wants de-prioritised or excluded."""
 
+    favorite_brands: List[str] = []
+    """Retail brands the user wants prioritised in shop search queries."""
+
     # --- Sizes ---
     shoe_size: Optional[str] = None
     top_size: Optional[str] = None
@@ -294,3 +297,60 @@ class WeekRecommendationResponse(BaseModel):
 
     user_id: str
     recommendations: List[DayOutfitSuggestion]
+
+
+# ---------------------------------------------------------------------------
+# Shop — wardrobe gaps & product options
+# ---------------------------------------------------------------------------
+
+
+class ShopProductOption(BaseModel):
+    """A single purchasable option surfaced for a wardrobe gap."""
+
+    id: str
+    title: str
+    brand: Optional[str] = None
+    price_display: Optional[str] = None
+    image_url: str
+    merchant_url: str
+    affiliate_url: Optional[str] = None
+
+
+class WardrobeGapSuggestion(BaseModel):
+    """One high-impact gap with zero or more product options."""
+
+    gap_id: str
+    title: str
+    reason: str
+    target_category: GarmentCategory
+    target_formality: Optional[GarmentFormality] = None
+    suggested_name: str
+    products: List[ShopProductOption] = []
+
+
+class ShopSuggestionsResponse(BaseModel):
+    user_id: str
+    gaps: List[WardrobeGapSuggestion]
+
+
+class ShopEventRequest(BaseModel):
+    gap_id: str
+    event_type: str
+    """One of ``impression``, ``click``, ``dismiss``, ``add_to_wardrobe``."""
+    product_id: Optional[str] = None
+
+
+class ShopMarkPurchasedRequest(BaseModel):
+    """Create a wardrobe item from a shop product (same fields as manual add)."""
+
+    gap_id: str
+    suggested_name: str
+    title: str
+    primary_image_url: HttpUrl
+    category: GarmentCategory
+    formality: Optional[GarmentFormality] = None
+    seasonality: Optional[GarmentSeasonality] = None
+    color: Optional[str] = None
+    brand: Optional[str] = None
+    product_id: Optional[str] = None
+    merchant_url: Optional[str] = None

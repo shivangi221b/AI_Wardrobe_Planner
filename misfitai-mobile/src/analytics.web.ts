@@ -29,3 +29,41 @@ export function trackAuthSuccess(provider: string): void {
     label: provider,
   });
 }
+
+export function trackShopImpression(gapId: string): void {
+  if (!measurementId) {
+    return;
+  }
+  if (!initialized) {
+    initAnalytics();
+  }
+  ReactGA.event({ category: 'shop', action: 'shop_impression', label: gapId });
+}
+
+export function trackShopClick(gapId: string, productId: string): void {
+  if (!measurementId) {
+    return;
+  }
+  if (!initialized) {
+    initAnalytics();
+  }
+  ReactGA.event({
+    category: 'shop',
+    action: 'shop_click',
+    label: `${gapId}:${productId}`,
+  });
+}
+
+export function trackShopPurchase(gapId: string, productId: string): void {
+  if (!measurementId) {
+    return;
+  }
+  if (!initialized) {
+    initAnalytics();
+  }
+  ReactGA.event({
+    category: 'shop',
+    action: 'shop_purchase',
+    label: `${gapId}:${productId}`,
+  });
+}

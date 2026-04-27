@@ -304,3 +304,42 @@ class TestPickGarmentColourPriority:
         )
         assert result is not None
         assert result.id == "sized_clean"
+
+
+def _make_bottom(
+    id: str,
+    formality: GarmentFormality = GarmentFormality.CASUAL,
+) -> GarmentItem:
+    tags = build_garment_tags(GarmentCategory.BOTTOM, formality)
+    return GarmentItem(
+        id=id,
+        user_id="u1",
+        primary_image_url="https://x.com/b.jpg",
+        category=GarmentCategory.BOTTOM,
+        sub_category="pants",
+        formality=formality,
+        tags=tags,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+@pytest.mark.asyncio
+async def test_work_meeting_picks_business_top_after_mark_purchased_style_upgrade(monkeypatch):
+    """Simulates adding a business top (e.g. from Shop) so work days get a real top pick."""
+
+    async def fake_expl(*_a, **_k):
+        return "ok"
+
+    monkeypatch.setattr("backend.recommendation.generate_outfit_explanation", fake_expl)
+
+    casual = _make_top("t-casual", "blue", GarmentFormality.CASUAL)
+    bottom = _make_bottom("b1", GarmentFormality.CASUAL)
+    events = [WeekEvent(day="Monday", event_type="work_meeting")]
+
+    rec1 = await generate_week_recommendations([casual, bottom], events)
+    assert rec1[0].top_id is None
+
+    business = _make_top("t-biz", "white", GarmentFormality.BUSINESS)
+    rec2 = await generate_week_recommendations([casual, bottom, business], events)
+    assert rec2[0].top_id == "t-biz"

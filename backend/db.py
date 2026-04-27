@@ -79,6 +79,13 @@ def _profiles_table_name() -> str:
     return os.getenv("SUPABASE_PROFILES_TABLE", "user_profiles")
 
 
+def _shop_events_table() -> str:
+    return (os.getenv("SUPABASE_SHOP_EVENTS_TABLE") or "shop_engagement_events").strip() or "shop_engagement_events"
+
+
+_local_shop_events: dict[str, list[dict[str, Any]]] = {}
+
+
 def _signup_registry_table() -> str:
     return (os.getenv("SUPABASE_SIGNUPS_TABLE") or "analytics_registered_users").strip() or "analytics_registered_users"
 
@@ -733,6 +740,7 @@ def _row_to_user_profile(row: dict[str, Any]) -> UserProfile:
         color_tone=row.get("color_tone"),
         favorite_colors=_str_list("favorite_colors"),
         avoided_colors=_str_list("avoided_colors"),
+        favorite_brands=_str_list("favorite_brands"),
         shoe_size=row.get("shoe_size"),
         top_size=row.get("top_size"),
         bottom_size=row.get("bottom_size"),
@@ -848,3 +856,47 @@ def store_avatar_image(user_id: str, image_bytes: bytes) -> str:
     except Exception:
         logger.exception("store_avatar_image failed user_id=%s", user_id)
         raise
+
+
+# ---------------------------------------------------------------------------
+# Shop engagement (append-only analytics)
+# ---------------------------------------------------------------------------
+
+
+def insert_shop_engagement_event(
+    user_id: str,
+    gap_id: str,
+    event_type: str,
+    product_id: Optional[str] = None,
+) -> None:
+    """Record a shop funnel event. Failures are logged only."""
+    now = datetime.utcnow().isoformat()
+    gap_id = (gap_id or "").strip()[:128]
+    event_type = (event_type or "").strip()[:64]
+    product_id = (product_id or "").strip()[:128] or None
+    row: dict[str, Any] = {
+        "user_id": user_id,
+        "gap_id": gap_id,
+        "event_type": event_type,
+        "product_id": product_id,
+        "created_at": now,
+    }
+    if _use_local_store():
+        _local_shop_events.setdefault(user_id, []).append(row)
+        logger.info(
+            "shop_event local user_id=%s gap_id=%s type=%s",
+            user_id,
+            gap_id,
+            event_type,
+        )
+        return
+    try:
+        get_supabase_client().table(_shop_events_table()).insert(row).execute()
+        logger.info(
+            "shop_event supabase user_id=%s gap_id=%s type=%s",
+            user_id,
+            gap_id,
+            event_type,
+        )
+    except Exception:
+        logger.exception("insert_shop_engagement_event failed user_id=%s", user_id)
