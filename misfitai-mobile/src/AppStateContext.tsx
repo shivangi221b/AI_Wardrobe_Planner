@@ -18,6 +18,7 @@ import type {
   GarmentFormality,
   RecommendationPinnedPieces,
   RecommendationVariant,
+  UserProfile,
 } from './types';
 import { dayOrder } from './constants';
 import {
@@ -27,6 +28,7 @@ import {
   confirmSearchAdd,
   getApiErrorMessage,
   getMeasurements,
+  getUserProfile,
   getWardrobe,
   getWeekEvents,
   getWeeklyRecommendations,
@@ -58,6 +60,7 @@ interface AppState {
   isLoadingWardrobe: boolean;
   wardrobeError: string | null;
   measurements: BodyMeasurements | null;
+  userProfile: UserProfile | null;
   searchGarmentCandidates: (
     query: string,
     limit?: number,
@@ -180,6 +183,7 @@ export function AppStateProvider({
   const [isLoadingWardrobe, setIsLoadingWardrobe] = useState(false);
   const [wardrobeError, setWardrobeError] = useState<string | null>(null);
   const [measurements, setMeasurements] = useState<BodyMeasurements | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [userId, setUserId] = useState<string>(
     () => userIdProp ?? `demo-${Math.random().toString(36).slice(2, 8)}`
   );
@@ -233,6 +237,15 @@ export function AppStateProvider({
         }
       } catch {
         // Measurements are non-blocking.
+      }
+
+      try {
+        const profile = await getUserProfile(userId);
+        if (!cancelled) {
+          setUserProfile(profile);
+        }
+      } catch {
+        // Profile is non-blocking.
       } finally {
         if (!cancelled) {
           setIsLoadingWardrobe(false);
@@ -623,6 +636,7 @@ export function AppStateProvider({
       isLoadingWardrobe,
       wardrobeError,
       measurements,
+      userProfile,
       searchGarmentCandidates,
       setCalendarConnected,
       setEventForDay,
@@ -653,6 +667,7 @@ export function AppStateProvider({
       isLoadingWardrobe,
       wardrobeError,
       measurements,
+      userProfile,
       searchGarmentCandidates,
       setCalendarConnected,
       setEventForDay,

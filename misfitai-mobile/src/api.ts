@@ -1121,6 +1121,7 @@ interface ProfileApiResponse {
     hair_color?: string | null;
     body_type?: string | null;
     skin_tone?: string | null;
+    avatar_image_url?: string | null;
   } | null;
   updated_at?: string;
 }
@@ -1143,6 +1144,7 @@ function mapUserProfile(r: ProfileApiResponse): UserProfile {
           hairColor: r.avatar_config.hair_color ?? null,
           bodyType: r.avatar_config.body_type ?? null,
           skinTone: r.avatar_config.skin_tone ?? null,
+          avatarImageUrl: r.avatar_config.avatar_image_url ?? null,
         }
       : null,
     updatedAt: r.updated_at,
@@ -1179,12 +1181,15 @@ export function profileUpdateToApiPayload(data: UserProfileUpdate): Record<strin
       payload.avatar_config = null;
     } else {
       const av: AvatarConfig = data.avatarConfig;
-      payload.avatar_config = {
-        hair_style: av.hairStyle ?? null,
-        hair_color: av.hairColor ?? null,
-        body_type: av.bodyType ?? null,
-        skin_tone: av.skinTone ?? null,
-      };
+      const cfg: Record<string, unknown> = {};
+      if (av.hairStyle !== undefined) cfg.hair_style = av.hairStyle;
+      if (av.hairColor !== undefined) cfg.hair_color = av.hairColor;
+      if (av.bodyType !== undefined) cfg.body_type = av.bodyType;
+      if (av.skinTone !== undefined) cfg.skin_tone = av.skinTone;
+      if (av.avatarImageUrl !== undefined) cfg.avatar_image_url = av.avatarImageUrl;
+      if (Object.keys(cfg).length > 0) {
+        payload.avatar_config = cfg;
+      }
     }
   }
   return payload;
@@ -1211,6 +1216,161 @@ export async function updateUserProfile(
     }
   );
   return mapUserProfile(response);
+}
+
+// ---------------------------------------------------------------------------
+// Avatar generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload a selfie to generate a stylised 2-D portrait avatar.
+ * The selfie is used only for generation and is NOT stored on the server.
+ *
+ * @param userId   Authenticated user id.
+ * @param selfieUri  Local file:// URI returned by expo-image-picker.
+ * @param pickerAsset Optional metadata from ``ImagePicker`` (native) so multipart name/type match real bytes.
+ * @returns        The public URL of the generated avatar image.
+ */
+export async function generateAvatar(
+  userId: string,
+  selfieUri: string,
+  pickerAsset?: { mimeType?: string | null; fileName?: string | null; type?: string | null }
+): Promise<string> {
+  if (USE_MOCK_API) {
+    // Return a deterministic placeholder so the UI can render something.
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(userId)}&size=512&background=1b1b19&color=f4f4f2&rounded=true`;
+  }
+
+  const formData = new FormData();
+
+  if (Platform.OS === 'web') {
+    // Browser FormData requires a Blob/File, not { uri }.
+    const res = await fetch(selfieUri);
+    const blob = await res.blob();
+    const name =
+      blob.type === 'image/png'
+        ? 'selfie.png'
+        : blob.type === 'image/webp'
+          ? 'selfie.webp'
+          : 'selfie.jpg';
+    formData.append('selfie', blob, name);
+  } else {
+    const mimeRaw =
+      (pickerAsset?.mimeType || pickerAsset?.type || '').toLowerCase() || 'image/jpeg';
+    let type = 'image/jpeg';
+    let name = pickerAsset?.fileName?.trim() || 'selfie.jpg';
+    if (mimeRaw.includes('png')) {
+      type = 'image/png';
+      if (!name.toLowerCase().endsWith('.png')) name = 'selfie.png';
+    } else if (mimeRaw.includes('webp')) {
+      type = 'image/webp';
+      if (!name.toLowerCase().endsWith('.webp')) name = 'selfie.webp';
+    } else if (mimeRaw.includes('heic') || mimeRaw.includes('heif')) {
+      type = 'image/heic';
+      if (!/\.hei[c|f]$/i.test(name)) name = 'selfie.heic';
+    } else if (mimeRaw.includes('jpeg') || mimeRaw.includes('jpg')) {
+      type = 'image/jpeg';
+      if (!/\.jpe?g$/i.test(name)) name = 'selfie.jpg';
+    }
+    formData.append('selfie', {
+      uri: selfieUri,
+      name,
+      type,
+    } as unknown as Blob);
+  }
+
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/avatar/generate`,
+    {
+      method: 'POST',
+      body: formData,
+      // Do NOT set Content-Type manually — fetch sets it with the boundary.
+    }
+  );
+
+  const rawBody = await response.text();
+  if (!response.ok) {
+    throw new ApiError(
+      `Avatar generation failed: ${response.status} ${response.statusText}`,
+      response.status,
+      rawBody
+    );
+  }
+
+  const data = JSON.parse(rawBody) as { avatar_image_url?: string };
+  const url = (data.avatar_image_url || '').trim();
+  if (!url) {
+    throw new ApiError('Invalid avatar response: missing avatar_image_url', 502, rawBody);
+  }
+  return url;
+}
+
+// ---------------------------------------------------------------------------
+// Outfit preview generation
+// ---------------------------------------------------------------------------
+
+export interface OutfitPreviewGarment {
+  url: string;
+  name: string;
+  category: string;
+}
+
+/**
+ * Build (or retrieve a cached) outfit preview showing the user's avatar wearing
+ * the recommended outfit items.
+ *
+ * The server first attempts AI generation (Imagen / Gemini multimodal); PIL
+ * side-by-side compositing is used as a deterministic fallback if AI is
+ * unavailable or returns no image.
+ *
+ * @param userId          Authenticated user id.
+ * @param outfitId        Stable outfit id used as the server-side cache key.
+ * @param avatarImageUrl  Resolved public URL of the user's avatar portrait.
+ * @param garmentImages   Ordered garment images (outerwear → top → bottom → shoes).
+ * @returns               The public URL of the generated or composited preview image.
+ */
+export async function generateOutfitPreview(
+  userId: string,
+  outfitId: string,
+  avatarImageUrl: string,
+  garmentImages: OutfitPreviewGarment[],
+): Promise<string> {
+  if (USE_MOCK_API) {
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(outfitId)}&size=512&background=1b1b19&color=f4f4f2&rounded=true`;
+  }
+
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/outfit-preview/generate`,
+    {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        outfit_id: outfitId,
+        avatar_image_url: avatarImageUrl,
+        garment_images: garmentImages.map((g) => ({
+          url: g.url,
+          name: g.name,
+          category: g.category,
+        })),
+      }),
+    }
+  );
+
+  const rawBody = await response.text();
+  if (!response.ok) {
+    throw new ApiError(
+      `Outfit preview generation failed: ${response.status} ${response.statusText}`,
+      response.status,
+      rawBody
+    );
+  }
+
+  const data = JSON.parse(rawBody) as { preview_image_url?: string };
+  const url = (data.preview_image_url || '').trim();
+  if (!url) {
+    throw new ApiError('Invalid outfit preview response: missing preview_image_url', 502, rawBody);
+  }
+  return url;
 }
 
 // ---------------------------------------------------------------------------

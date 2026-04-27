@@ -114,6 +114,8 @@ export interface AvatarConfig {
   hairColor?: string | null;
   bodyType?: string | null;
   skinTone?: string | null;
+  /** Public URL of the AI-generated portrait image produced from a selfie. */
+  avatarImageUrl?: string | null;
 }
 
 export type ColorTone = 'warm' | 'cool' | 'neutral';

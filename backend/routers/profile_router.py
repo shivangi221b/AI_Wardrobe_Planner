@@ -28,6 +28,7 @@ class AvatarConfigBody(BaseModel):
     hair_color: Optional[str] = None
     body_type: Optional[str] = None
     skin_tone: Optional[str] = None
+    avatar_image_url: Optional[str] = None
 
 
 class UserProfileBody(BaseModel):
@@ -83,6 +84,11 @@ async def update_profile(user_id: str, body: UserProfileBody) -> UserProfile:
     are left unchanged on existing profiles.  Explicitly sending ``null``
     clears the stored value (e.g. ``{"skin_tone": null}`` removes the tone
     preference).
+
+    For ``avatar_config``, each nested key follows the same rule: only keys
+    present in the JSON object are merged; omitted nested keys keep their
+    stored values.  Sending ``{"avatar_config": {"hair_style": "short"}}`` does
+    not clear ``hair_color``, ``skin_tone``, or ``avatar_image_url``.
     """
     data: dict[str, Any] = {}
 
@@ -96,17 +102,28 @@ async def update_profile(user_id: str, body: UserProfileBody) -> UserProfile:
         if field in body.model_fields_set:
             data[field] = getattr(body, field)
 
-    # avatar_config: null clears it; an object merges individual sub-fields.
+    # avatar_config: null clears it; a non-null object merges only keys that appear in the body.
     if "avatar_config" in body.model_fields_set:
         if body.avatar_config is None:
             data["avatar_config"] = None
         else:
-            av = body.avatar_config
-            data["avatar_config"] = AvatarConfig(
-                hair_style=av.hair_style,
-                hair_color=av.hair_color,
-                body_type=av.body_type,
-                skin_tone=av.skin_tone,
+            existing = get_user_profile(user_id)
+            base = (
+                existing.avatar_config
+                if existing and existing.avatar_config
+                else AvatarConfig()
             )
+            av = body.avatar_config
+            merged: dict[str, Any] = {
+                "hair_style": base.hair_style,
+                "hair_color": base.hair_color,
+                "body_type": base.body_type,
+                "skin_tone": base.skin_tone,
+                "avatar_image_url": base.avatar_image_url,
+            }
+            for key in ("hair_style", "hair_color", "body_type", "skin_tone", "avatar_image_url"):
+                if key in av.model_fields_set:
+                    merged[key] = getattr(av, key)
+            data["avatar_config"] = AvatarConfig(**merged)
 
     return upsert_user_profile(user_id, data)

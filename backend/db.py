@@ -5,6 +5,7 @@ import os
 import re
 from datetime import datetime
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, List, Optional, TypedDict
 
 import bcrypt
@@ -38,6 +39,10 @@ _local_signup_user_ids: set[str] = set()
 _local_recommendation_choice_events: list[dict[str, Any]] = []
 # Email/password users when Supabase is unavailable or table writes fall back (see create_password_user).
 _local_app_users_by_email: dict[str, dict[str, str]] = {}
+
+# RPC names that were not found in the Supabase schema cache (populated on first 404).
+# Module-level so the "log once" warning actually fires only once per process lifetime.
+_rpc_missing: set[str] = set()
 
 
 class PasswordUserRow(TypedDict):
@@ -582,28 +587,40 @@ def increment_recommendation_counts(garment_ids: List[str], user_id: str) -> Non
         return
     client = get_supabase_client()
     for gid, delta in counts.items():
-        try:
-            client.rpc(
-                "increment_garment_recommended",
-                {"garment_id": gid, "delta": delta},
-            ).execute()
-        except Exception:
-            # RPC may not exist yet — fall back to a read-modify-write.
+        rpc_name = "increment_garment_recommended"
+        if rpc_name not in _rpc_missing:
             try:
-                result = (
-                    client.table(_table_name())
-                    .select("times_recommended")
-                    .eq("id", gid)
-                    .eq("user_id", user_id)
-                    .maybe_single()
-                    .execute()
-                )
-                current = int((result.data or {}).get("times_recommended") or 0)
-                client.table(_table_name()).update(
-                    {"times_recommended": current + delta}
-                ).eq("id", gid).eq("user_id", user_id).execute()
-            except Exception:
-                logger.exception("Failed to increment times_recommended for garment %s", gid)
+                client.rpc(rpc_name, {"garment_id": gid, "delta": delta}).execute()
+                continue
+            except Exception as rpc_exc:
+                msg = str(rpc_exc).lower()
+                # PGRST202 = function not found; log once then fall back silently.
+                if "pgrst202" in msg or "could not find" in msg:
+                    logger.warning(
+                        "db: RPC '%s' not found in schema cache — using read-modify-write fallback. "
+                        "Run scripts/sql/increment_garment_recommended.sql in the Supabase SQL editor "
+                        "to create the function and eliminate this fallback.",
+                        rpc_name,
+                    )
+                    _rpc_missing.add(rpc_name)
+                else:
+                    logger.warning("db: RPC '%s' failed: %s", rpc_name, rpc_exc)
+        # Read-modify-write fallback (non-atomic but acceptable for recommendation counts).
+        try:
+            result = (
+                client.table(_table_name())
+                .select("times_recommended")
+                .eq("id", gid)
+                .eq("user_id", user_id)
+                .maybe_single()
+                .execute()
+            )
+            current = int((result.data or {}).get("times_recommended") or 0)
+            client.table(_table_name()).update(
+                {"times_recommended": current + delta}
+            ).eq("id", gid).eq("user_id", user_id).execute()
+        except Exception:
+            logger.exception("Failed to increment times_recommended for garment %s", gid)
 
 
 def set_garment_hidden(garment_id: str, user_id: str, hidden: bool) -> Optional[GarmentItem]:
@@ -751,6 +768,7 @@ def _row_to_user_profile(row: dict[str, Any]) -> UserProfile:
             hair_color=avatar_raw.get("hair_color"),
             body_type=avatar_raw.get("body_type"),
             skin_tone=avatar_raw.get("skin_tone"),
+            avatar_image_url=avatar_raw.get("avatar_image_url"),
         )
 
     def _str_list(key: str) -> list[str]:
@@ -837,3 +855,117 @@ def upsert_user_profile(user_id: str, data: dict[str, Any]) -> UserProfile:
         logger.exception("upsert_user_profile failed user_id=%s", user_id)
         # Return a best-effort object so callers don't crash.
         return _row_to_user_profile(payload)
+
+
+# ---------------------------------------------------------------------------
+# Avatar image storage
+# ---------------------------------------------------------------------------
+
+_LOCAL_AVATARS_DIR = Path(os.getenv("LOCAL_AVATARS_DIR", "outputs/local_avatars"))
+_LOCAL_AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+
+_AVATAR_BUCKET = lambda: (os.getenv("AVATAR_STORAGE_BUCKET") or "avatars").strip()  # noqa: E731
+
+
+def store_avatar_image(user_id: str, image_bytes: bytes) -> str:
+    """
+    Persist a generated avatar JPEG and return its public URL.
+
+    Local mode  → writes to ``outputs/local_avatars/{user_id}.jpg`` and
+                  returns the relative path ``/assets/local-avatars/{user_id}.jpg``
+                  (served by the FastAPI static-files mount added in ``main.py``).
+
+    Supabase mode → uploads to the ``AVATAR_STORAGE_BUCKET`` bucket at path
+                    ``{user_id}/avatar.jpg`` (upsert so re-generation overwrites)
+                    and returns the public URL via ``get_public_url``.
+    """
+    safe_id = re.sub(r"[^A-Za-z0-9_\-]", "_", user_id)[:128]
+
+    if _use_local_store():
+        dest = _LOCAL_AVATARS_DIR / f"{safe_id}.jpg"
+        dest.write_bytes(image_bytes)
+        return f"/assets/local-avatars/{safe_id}.jpg"
+
+    storage_path = f"{safe_id}/avatar.jpg"
+    bucket = _AVATAR_BUCKET()
+    try:
+        client = get_supabase_client()
+        client.storage.from_(bucket).upload(
+            path=storage_path,
+            file=image_bytes,
+            file_options={"content-type": "image/jpeg", "upsert": "true"},
+        )
+        url_resp = client.storage.from_(bucket).get_public_url(storage_path)
+        return str(url_resp)
+    except Exception:
+        logger.exception("store_avatar_image failed user_id=%s", user_id)
+        raise
+
+
+_OUTFIT_PREVIEW_VERSION = "v7"   # bump when composite layout changes to bust old cached files
+
+
+def get_outfit_preview_url(user_id: str, outfit_id: str) -> str | None:
+    """
+    Return the public URL of an already-generated outfit preview, or ``None``
+    if no preview has been stored for this ``(user_id, outfit_id)`` pair yet.
+    """
+    safe_uid = re.sub(r"[^A-Za-z0-9_\-]", "_", user_id)[:128]
+    safe_oid = re.sub(r"[^A-Za-z0-9_\-]", "_", outfit_id)[:128]
+    versioned_oid = f"{_OUTFIT_PREVIEW_VERSION}_{safe_oid}"
+
+    if _use_local_store():
+        dest = _LOCAL_AVATARS_DIR / "outfit-previews" / safe_uid / f"{versioned_oid}.jpg"
+        if dest.exists():
+            return f"/assets/local-avatars/outfit-previews/{safe_uid}/{versioned_oid}.jpg"
+        return None
+
+    storage_path = f"{safe_uid}/outfit-previews/{versioned_oid}.jpg"
+    bucket = _AVATAR_BUCKET()
+    try:
+        client = get_supabase_client()
+        result = client.storage.from_(bucket).list(path=f"{safe_uid}/outfit-previews")
+        names = [obj.get("name", "") for obj in (result or [])]
+        if f"{versioned_oid}.jpg" in names:
+            return str(client.storage.from_(bucket).get_public_url(storage_path))
+    except Exception:
+        logger.debug("get_outfit_preview_url: check failed, will regenerate")
+    return None
+
+
+def store_outfit_preview_image(user_id: str, outfit_id: str, image_bytes: bytes) -> str:
+    """
+    Persist a generated outfit-on-avatar JPEG at a deterministic, versioned path
+    keyed by ``(user_id, outfit_id)`` and return its public URL.
+
+    Local mode  → ``outputs/local_avatars/outfit-previews/{user_id}/{version}_{outfit_id}.jpg``
+    Supabase    → ``{user_id}/outfit-previews/{version}_{outfit_id}.jpg`` in the avatar bucket.
+
+    Bump ``_OUTFIT_PREVIEW_VERSION`` whenever the composite layout changes to
+    force regeneration of all existing cached previews.
+    """
+    safe_uid = re.sub(r"[^A-Za-z0-9_\-]", "_", user_id)[:128]
+    safe_oid = re.sub(r"[^A-Za-z0-9_\-]", "_", outfit_id)[:128]
+    versioned_oid = f"{_OUTFIT_PREVIEW_VERSION}_{safe_oid}"
+
+    if _use_local_store():
+        dest_dir = _LOCAL_AVATARS_DIR / "outfit-previews" / safe_uid
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{versioned_oid}.jpg"
+        dest.write_bytes(image_bytes)
+        return f"/assets/local-avatars/outfit-previews/{safe_uid}/{versioned_oid}.jpg"
+
+    storage_path = f"{safe_uid}/outfit-previews/{versioned_oid}.jpg"
+    bucket = _AVATAR_BUCKET()
+    try:
+        client = get_supabase_client()
+        client.storage.from_(bucket).upload(
+            path=storage_path,
+            file=image_bytes,
+            file_options={"content-type": "image/jpeg", "upsert": "true"},
+        )
+        url_resp = client.storage.from_(bucket).get_public_url(storage_path)
+        return str(url_resp)
+    except Exception:
+        logger.exception("store_outfit_preview_image failed user_id=%s outfit_id=%s", user_id, outfit_id)
+        raise

@@ -10,11 +10,23 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { useAppState } from './AppStateContext';
 import { dayLabels, dayOrder, eventTypeLabels } from './constants';
 import { getImageForGarment } from './stockImages';
-import type { DayOfWeek } from './types';
+import type { DayOfWeek, GarmentCategory } from './types';
 import { palette, radius, type } from './theme';
+import { OutfitAvatarPreview, type CollagePiece } from './OutfitAvatarPreview';
+import { OutfitDetailModal } from './OutfitDetailModal';
+import { generateOutfitPreview, API_BASE_URL, type OutfitPreviewGarment } from './api';
+import {
+  trackOutfitAvatarPreviewOpen,
+  trackOutfitAccepted,
+} from './analytics';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function isPlaceholderName(name: string): boolean {
   const lower = name.toLowerCase().trim();
@@ -42,6 +54,20 @@ function outfitSummaryLabel(rec: { outfit: { topName: string; bottomName: string
   return parts.length > 0 ? parts.join(' + ') : '\u2014';
 }
 
+/** Convert a relative `/assets/…` avatar URL to a fully-qualified one for the Image component. */
+function resolveAvatarUri(url: string): string {
+  const q = url.indexOf('?');
+  const pathPart = q >= 0 ? url.slice(0, q) : url;
+  const query = q >= 0 ? url.slice(q) : '';
+  if (/^https?:\/\//i.test(pathPart)) return `${pathPart}${query}`;
+  if (pathPart.startsWith('/')) return `${API_BASE_URL}${pathPart}${query}`;
+  return url;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export function WeeklyPlanScreen({
   onRegenerateWeek,
   onNavigateToWardrobe,
@@ -65,14 +91,38 @@ export function WeeklyPlanScreen({
   const [error, setError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('monday');
 
+  // "Items" (collage) vs "On Me" (avatar) toggle
+  const [viewMode, setViewMode] = useState<'items' | 'on-me'>('items');
+
+  // Avatar detail modal
+  const [detailVisible, setDetailVisible] = useState(false);
+
+  // Per-day composite image cache: outfitId → URL
+  const [compositeCache, setCompositeCache] = useState<Record<string, string>>({});
+  const [generatingComposite, setGeneratingComposite] = useState(false);
+
+  // Track how long the user has been on a day in "on-me" mode for implicit acceptance
+  const onMeEntryTime = useRef<number | null>(null);
+
   const cardFade = useRef(new Animated.Value(0)).current;
   const pieceAnimations = useRef([0, 1, 2, 3].map(() => new Animated.Value(0))).current;
+
+  const avatarImageUrl = useMemo(() => {
+    const raw = userProfile?.avatarConfig?.avatarImageUrl;
+    return raw ? resolveAvatarUri(raw) : null;
+  }, [userProfile]);
+
+  // Prefetch avatar portrait as soon as it is available
+  useEffect(() => {
+    if (avatarImageUrl) {
+      ExpoImage.prefetch(avatarImageUrl).catch(() => {});
+    }
+  }, [avatarImageUrl]);
 
   useEffect(() => {
     if (recommendationSets.length === 0) {
       return;
     }
-
     const selectedExists = recommendationSets.some((item) => item.day === selectedDay);
     if (!selectedExists) {
       setSelectedDay(recommendationSets[0].day);
@@ -99,14 +149,11 @@ export function WeeklyPlanScreen({
 
   const selectedRecommendation = selectedVariant?.recommendation ?? null;
 
+  // Animate card whenever the day changes
   useEffect(() => {
-    if (!selectedRecommendation) {
-      return;
-    }
-
+    if (!selectedRecommendation) return;
     cardFade.setValue(0);
     pieceAnimations.forEach((value) => value.setValue(0));
-
     Animated.parallel([
       Animated.timing(cardFade, {
         toValue: 1,
@@ -116,15 +163,36 @@ export function WeeklyPlanScreen({
       Animated.stagger(
         80,
         pieceAnimations.map((value) =>
-          Animated.timing(value, {
-            toValue: 1,
-            duration: 320,
-            useNativeDriver: true,
-          })
+          Animated.timing(value, { toValue: 1, duration: 320, useNativeDriver: true })
         )
       ),
     ]).start();
   }, [selectedRecommendation, cardFade, pieceAnimations]);
+
+  // Track implicit acceptance when leaving a day after viewing it in "on-me" mode for >2 s
+  const handleDayChange = (day: DayOfWeek) => {
+    if (viewMode === 'on-me' && onMeEntryTime.current !== null) {
+      const elapsed = Date.now() - onMeEntryTime.current;
+      if (elapsed >= 2000 && selectedRecommendation) {
+        trackOutfitAccepted(selectedRecommendation.day, selectedRecommendation.eventType);
+      }
+    }
+    // Reset entry time; immediately restart it if still in "on-me" mode so
+    // acceptance tracking fires correctly for the newly selected day too.
+    onMeEntryTime.current = viewMode === 'on-me' ? Date.now() : null;
+    setSelectedDay(day);
+  };
+
+  // Record when user enters "on-me" mode
+  const handleViewModeChange = (mode: 'items' | 'on-me') => {
+    if (mode === 'on-me' && selectedRecommendation) {
+      trackOutfitAvatarPreviewOpen(selectedRecommendation.day, selectedRecommendation.eventType);
+      onMeEntryTime.current = Date.now();
+    } else {
+      onMeEntryTime.current = null;
+    }
+    setViewMode(mode);
+  };
 
   const handleRegenerate = async () => {
     try {
@@ -142,10 +210,12 @@ export function WeeklyPlanScreen({
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // Build collage pieces
+  // ---------------------------------------------------------------------------
+
   const dressId = selectedRecommendation?.outfit.dressId;
-  const dressGarment = dressId
-    ? garments.find((item) => item.id === dressId)
-    : undefined;
+  const dressGarment = dressId ? garments.find((item) => item.id === dressId) : undefined;
   const isDressOutfit = Boolean(dressId);
 
   const topGarment = selectedRecommendation
@@ -161,12 +231,6 @@ export function WeeklyPlanScreen({
   const topName = selectedRecommendation?.outfit.topName || topGarment?.name || '';
   const bottomName = selectedRecommendation?.outfit.bottomName || bottomGarment?.name || '';
 
-  type CollagePiece = {
-    name: string;
-    image: { uri: string } | ReturnType<typeof getImageForGarment>;
-    garmentId?: string;
-    hidden?: boolean;
-  };
   const collagePieces: CollagePiece[] = [];
 
   const missingTop = !isDressOutfit && (!topName || isPlaceholderName(topName));
@@ -181,6 +245,7 @@ export function WeeklyPlanScreen({
         : getImageForGarment(dressName, 'dress'),
       garmentId: dressGarment?.id,
       hidden: dressGarment?.hiddenFromRecommendations,
+      category: 'dress' as GarmentCategory,
     });
   } else {
     if (!missingTop) {
@@ -191,6 +256,7 @@ export function WeeklyPlanScreen({
           : getImageForGarment(topName, 'top'),
         garmentId: topGarment?.id,
         hidden: topGarment?.hiddenFromRecommendations,
+        category: 'top' as GarmentCategory,
       });
     }
     if (!missingBottom) {
@@ -201,6 +267,7 @@ export function WeeklyPlanScreen({
           : getImageForGarment(bottomName, 'bottom'),
         garmentId: bottomGarment?.id,
         hidden: bottomGarment?.hiddenFromRecommendations,
+        category: 'bottom' as GarmentCategory,
       });
     }
   }
@@ -212,6 +279,7 @@ export function WeeklyPlanScreen({
         : getImageForGarment(outerwearGarment.name, 'outerwear'),
       garmentId: outerwearGarment.id,
       hidden: outerwearGarment.hiddenFromRecommendations,
+      category: 'outerwear' as GarmentCategory,
     });
   }
   if (shoesGarment) {
@@ -222,8 +290,52 @@ export function WeeklyPlanScreen({
         : getImageForGarment(shoesGarment.name, 'shoes'),
       garmentId: shoesGarment.id,
       hidden: shoesGarment.hiddenFromRecommendations,
+      category: 'shoes' as GarmentCategory,
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // Composite generation
+  // ---------------------------------------------------------------------------
+
+  const currentOutfitId = selectedRecommendation?.outfit.id ?? null;
+  const currentCompositeUrl = currentOutfitId ? (compositeCache[currentOutfitId] ?? null) : null;
+
+  const handleGenerateComposite = async () => {
+    if (!currentOutfitId || generatingComposite || !avatarImageUrl) return;
+
+    // Build the list of garment images with real URLs only
+    const garmentImages: OutfitPreviewGarment[] = collagePieces
+      .filter((p) => !p.hidden)
+      .map((p) => {
+        const src = p.image;
+        const url =
+          typeof src === 'object' && src !== null && !Array.isArray(src) && 'uri' in src
+            ? (src as { uri: string }).uri
+            : '';
+        return { url, name: p.name, category: p.category ?? 'top' };
+      })
+      .filter((g) => g.url.startsWith('http'));
+
+    if (garmentImages.length === 0) {
+      Alert.alert('No garment images', 'Add photos to your wardrobe items to enable outfit preview.');
+      return;
+    }
+
+    setGeneratingComposite(true);
+    try {
+      const url = await generateOutfitPreview(userId, currentOutfitId, avatarImageUrl, garmentImages);
+      setCompositeCache((prev) => ({ ...prev, [currentOutfitId]: url }));
+    } catch {
+      Alert.alert('Preview unavailable', 'Could not build the outfit preview. Please try again later.');
+    } finally {
+      setGeneratingComposite(false);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Piece long-press (hide/unhide) — shared between collage & detail modal
+  // ---------------------------------------------------------------------------
 
   const handlePieceLongPress = (piece: CollagePiece) => {
     if (!piece.garmentId) return;
@@ -248,6 +360,11 @@ export function WeeklyPlanScreen({
     );
   };
 
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
+  const hasAvatar = Boolean(avatarImageUrl);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -272,7 +389,7 @@ export function WeeklyPlanScreen({
                 return (
                   <Pressable
                     key={day}
-                    onPress={() => setSelectedDay(day)}
+                    onPress={() => handleDayChange(day)}
                     style={[styles.dayTab, active && styles.dayTabActive, !hasRecommendation && styles.dayTabMuted]}
                   >
                     <Text style={[styles.dayTabText, active && styles.dayTabTextActive]}>
@@ -376,73 +493,108 @@ export function WeeklyPlanScreen({
               ) : null}
               <Text style={styles.lookReason}>{selectedRecommendation.explanation}</Text>
 
-              <View style={styles.collageGrid}>
-                {collagePieces.map((piece, index) => {
-                  const pieceAnim = pieceAnimations[index];
-                  return (
-                    <Animated.View
-                      key={`${piece.name}-${index}`}
-                      style={[
-                        styles.pieceCard,
-                        piece.hidden && styles.pieceCardHidden,
-                        {
-                          opacity: pieceAnim,
-                          transform: [
-                            {
-                              scale: pieceAnim.interpolate({
-                                inputRange: [0, 1],
-                                outputRange: [0.96, 1],
-                              }),
-                            },
-                          ],
-                        },
-                      ]}
-                    >
-                      <Pressable
-                        onLongPress={() => handlePieceLongPress(piece)}
-                        delayLongPress={400}
-                        style={styles.piecePressable}
-                      >
-                        <Image source={piece.image} style={styles.pieceImage} resizeMode="contain" />
-                        <Text style={styles.pieceLabel}>{piece.name}</Text>
-                        {piece.hidden ? (
-                          <Text style={styles.pieceHiddenBadge}>Hidden</Text>
-                        ) : null}
-                      </Pressable>
-                    </Animated.View>
-                  );
-                })}
+              {/* View mode toggle — only show "On Me" when avatar exists */}
+              <View style={styles.toggleRow}>
+                <Pressable
+                  style={[styles.toggleBtn, viewMode === 'items' && styles.toggleBtnActive]}
+                  onPress={() => handleViewModeChange('items')}
+                >
+                  <Text style={[styles.toggleBtnText, viewMode === 'items' && styles.toggleBtnTextActive]}>
+                    Items
+                  </Text>
+                </Pressable>
+                {hasAvatar ? (
+                  <Pressable
+                    style={[styles.toggleBtn, viewMode === 'on-me' && styles.toggleBtnActive]}
+                    onPress={() => handleViewModeChange('on-me')}
+                  >
+                    <Text style={[styles.toggleBtnText, viewMode === 'on-me' && styles.toggleBtnTextActive]}>
+                      On Me
+                    </Text>
+                  </Pressable>
+                ) : null}
               </View>
 
-              {hasMissingItems ? (
-                <View style={styles.missingItemsBanner}>
-                  <Text style={styles.missingItemsTitle}>
-                    {missingTop && missingBottom
-                      ? 'Your wardrobe needs a top and a bottom'
-                      : missingTop
-                        ? 'We need a top to complete this outfit'
-                        : 'We need a bottom to complete this outfit'}
-                  </Text>
-                  <Text style={styles.missingItemsBody}>
-                    {missingTop && missingBottom
-                      ? 'Add at least one top (shirt, blouse, sweater) and one bottom (pants, jeans, skirt) to see complete outfits.'
-                      : missingTop
-                        ? 'Add a shirt, blouse, or sweater to your wardrobe so we can build a full outfit.'
-                        : 'Add pants, jeans, or a skirt to your wardrobe so we can build a full outfit.'}
-                  </Text>
-                  {onNavigateToWardrobe ? (
-                    <Pressable onPress={onNavigateToWardrobe} style={styles.missingItemsButton}>
-                      <Text style={styles.missingItemsButtonText}>
+              {viewMode === 'items' ? (
+                <>
+                  <View style={styles.collageGrid}>
+                    {collagePieces.map((piece, index) => {
+                      const pieceAnim = pieceAnimations[index];
+                      return (
+                        <Animated.View
+                          key={`${piece.name}-${index}`}
+                          style={[
+                            styles.pieceCard,
+                            piece.hidden && styles.pieceCardHidden,
+                            {
+                              opacity: pieceAnim,
+                              transform: [
+                                {
+                                  scale: pieceAnim.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [0.96, 1],
+                                  }),
+                                },
+                              ],
+                            },
+                          ]}
+                        >
+                          <Pressable
+                            onLongPress={() => handlePieceLongPress(piece)}
+                            delayLongPress={400}
+                            style={styles.piecePressable}
+                          >
+                            <Image source={piece.image} style={styles.pieceImage} resizeMode="contain" />
+                            <Text style={styles.pieceLabel}>{piece.name}</Text>
+                            {piece.hidden ? (
+                              <Text style={styles.pieceHiddenBadge}>Hidden</Text>
+                            ) : null}
+                          </Pressable>
+                        </Animated.View>
+                      );
+                    })}
+                  </View>
+
+                  {hasMissingItems ? (
+                    <View style={styles.missingItemsBanner}>
+                      <Text style={styles.missingItemsTitle}>
                         {missingTop && missingBottom
-                          ? 'Add garments \u2192'
+                          ? 'Your wardrobe needs a top and a bottom'
                           : missingTop
-                            ? 'Add a top \u2192'
-                            : 'Add a bottom \u2192'}
+                            ? 'We need a top to complete this outfit'
+                            : 'We need a bottom to complete this outfit'}
                       </Text>
-                    </Pressable>
+                      <Text style={styles.missingItemsBody}>
+                        {missingTop && missingBottom
+                          ? 'Add at least one top (shirt, blouse, sweater) and one bottom (pants, jeans, skirt) to see complete outfits.'
+                          : missingTop
+                            ? 'Add a shirt, blouse, or sweater to your wardrobe so we can build a full outfit.'
+                            : 'Add pants, jeans, or a skirt to your wardrobe so we can build a full outfit.'}
+                      </Text>
+                      {onNavigateToWardrobe ? (
+                        <Pressable onPress={onNavigateToWardrobe} style={styles.missingItemsButton}>
+                          <Text style={styles.missingItemsButtonText}>
+                            {missingTop && missingBottom
+                              ? 'Add garments \u2192'
+                              : missingTop
+                                ? 'Add a top \u2192'
+                                : 'Add a bottom \u2192'}
+                          </Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
                   ) : null}
-                </View>
-              ) : null}
+                </>
+              ) : (
+                <OutfitAvatarPreview
+                  avatarImageUrl={avatarImageUrl}
+                  collagePieces={collagePieces}
+                  compositeImageUrl={currentCompositeUrl}
+                  generating={generatingComposite}
+                  onGenerateComposite={handleGenerateComposite}
+                  onTap={() => setDetailVisible(true)}
+                />
+              )}
             </Animated.View>
 
             <View style={styles.weekList}>
@@ -478,6 +630,21 @@ export function WeeklyPlanScreen({
           </Pressable>
         ) : null}
       </ScrollView>
+
+      {/* Full-screen detail modal */}
+      {selectedRecommendation ? (
+        <OutfitDetailModal
+          visible={detailVisible}
+          onClose={() => setDetailVisible(false)}
+          avatarImageUrl={avatarImageUrl}
+          compositeImageUrl={currentCompositeUrl}
+          collagePieces={collagePieces}
+          explanation={selectedRecommendation.explanation}
+          dayLabel={dayLabels[selectedRecommendation.day]}
+          eventLabel={eventTypeLabels[selectedRecommendation.eventType]}
+          onLongPressPiece={handlePieceLongPress}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -612,6 +779,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     fontFamily: type.body,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    overflow: 'hidden',
+    alignSelf: 'flex-start',
+  },
+  toggleBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 7,
+    backgroundColor: palette.panel,
+  },
+  toggleBtnActive: {
+    backgroundColor: palette.accent,
+  },
+  toggleBtnText: {
+    color: palette.inkSoft,
+    fontSize: 13,
+    fontFamily: type.bodyDemi,
+  },
+  toggleBtnTextActive: {
+    color: palette.textOnAccent,
   },
   collageGrid: {
     flexDirection: 'row',

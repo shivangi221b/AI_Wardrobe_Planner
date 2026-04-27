@@ -116,12 +116,14 @@ jobs:
               IMAGE_STORAGE_BACKEND=supabase,\
               SUPABASE_GARMENTS_BUCKET=garments,\
               SUPABASE_GARMENTS_TABLE=garments,\
+              AVATAR_STORAGE_BUCKET=avatars,\
               VERTEX_AI_MODEL=gemini-2.0-flash,\
               GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }},\
               GOOGLE_CLOUD_LOCATION=${{ env.GCP_REGION }},\
               VERTEX_AI_VISION_MODEL=gemini-2.5-flash,\
               IMAGE_GEN_PROVIDER=vertex,\
-              IMAGEN_MODEL=imagen-4.0-fast-generate-001" \
+              IMAGEN_MODEL=imagen-4.0-fast-generate-001,\
+              IMAGE_GEN_MAX_PROMPT_CHARS=10000" \
             --quiet
 
       # ── 8. Print the dev service URL ──────────────────────────────────────────

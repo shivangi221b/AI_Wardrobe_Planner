@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -11,10 +13,13 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { palette, radius, type } from './theme';
 import { useAppState } from './AppStateContext';
 import {
+  API_BASE_URL,
+  generateAvatar,
   getUserProfile,
   updateUserProfile,
 } from './api';
@@ -204,23 +209,46 @@ function SaveBar({
 // Avatar preview + edit modal
 // ---------------------------------------------------------------------------
 
+/** Backend may return a path like ``/assets/local-avatars/…`` — resolve against the API host (needed for Expo web). Preserves ``?cb=`` cache-busters. */
+function resolveAvatarImageUri(url: string): string {
+  const q = url.indexOf('?');
+  const pathPart = q >= 0 ? url.slice(0, q) : url;
+  const query = q >= 0 ? url.slice(q) : '';
+  if (/^https?:\/\//i.test(pathPart)) return `${pathPart}${query}`;
+  if (pathPart.startsWith('/')) return `${API_BASE_URL}${pathPart}${query}`;
+  return url;
+}
+
 function AvatarPreview({
   avatar,
   skinTone,
+  imageUri,
 }: {
   avatar: AvatarConfig | null | undefined;
   skinTone: SkinTone | null | undefined;
+  /** When set, shows the generated portrait at compact thumbnail size (placeholder circle otherwise). */
+  imageUri?: string | null;
 }) {
   const hex =
     SKIN_TONES.find((t) => t.key === (avatar?.skinTone ?? skinTone))?.hex ?? '#D4956A';
 
   return (
     <View style={s.avatarPreview}>
-      {/* Simple silhouette placeholder — replace with actual illustration assets */}
-      <View style={[s.avatarCircle, { backgroundColor: hex }]}>
-        <Text style={s.avatarInitial}>👤</Text>
-      </View>
+      {imageUri ? (
+        <Image
+          source={{ uri: resolveAvatarImageUri(imageUri) }}
+          style={s.avatarImageThumb}
+          resizeMode="cover"
+        />
+      ) : (
+        <View style={[s.avatarCircle, { backgroundColor: hex }]}>
+          <Text style={s.avatarInitial}>👤</Text>
+        </View>
+      )}
       <View style={s.avatarDetails}>
+        <Text style={s.avatarLine}>
+          {imageUri ? 'Illustrated portrait' : 'Preview'}
+        </Text>
         <Text style={s.avatarLine}>
           {avatar?.bodyType ? avatar.bodyType.replace('_', ' ') : 'Body type: —'}
         </Text>
@@ -368,6 +396,9 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
   // --- Avatar ---
   const [avatar, setAvatar] = useState<AvatarConfig | null>(null);
   const [avatarModalOpen, setAvatarModalOpen] = useState(false);
+  const [avatarImageUrl, setAvatarImageUrl] = useState<string | null>(null);
+  const [avatarGenerating, setAvatarGenerating] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
 
   // --- Load ---
   useEffect(() => {
@@ -386,6 +417,13 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
           setBottomSize(p.bottomSize ?? null);
           setShoeSize(p.shoeSize ?? '');
           setAvatar(p.avatarConfig ?? null);
+          {
+            const raw = p.avatarConfig?.avatarImageUrl ?? null;
+            const base = raw ? raw.split('?')[0] : null;
+            setAvatarImageUrl(
+              base ? `${base}?cb=${encodeURIComponent(p.updatedAt ?? String(Date.now()))}` : null
+            );
+          }
         }
       })
       .finally(() => setLoading(false));
@@ -485,6 +523,83 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
       /* non-blocking */
     }
   }, [userId]);
+
+  // --- Selfie capture + avatar generation ---
+
+  const pickSelfie = useCallback(
+    async (fromCamera: boolean) => {
+      // Request permission for camera if needed.
+      if (fromCamera) {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Camera permission required', 'Please allow camera access in Settings.');
+          return;
+        }
+      }
+
+      const result = fromCamera
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.8,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.8,
+          });
+
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+
+      const selfieUri = result.assets[0].uri;
+      setAvatarGenerating(true);
+      setAvatarError(null);
+
+      try {
+        const asset = result.assets[0];
+        const url = await generateAvatar(userId, selfieUri, {
+          mimeType: asset.mimeType,
+          fileName: asset.fileName ?? undefined,
+          type: asset.type,
+        });
+        const canonical = url.split('?')[0];
+        // Same storage path is overwritten on regenerate — bust HTTP cache for the Image view.
+        setAvatarImageUrl(`${canonical}?cb=${Date.now()}`);
+        const newAvatar: AvatarConfig = {
+          ...(avatar ?? {}),
+          avatarImageUrl: canonical,
+        };
+        setAvatar(newAvatar);
+        await updateUserProfile(userId, { avatarConfig: newAvatar });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Avatar generation failed.';
+        setAvatarError(msg);
+      } finally {
+        setAvatarGenerating(false);
+      }
+    },
+    [userId, avatar]
+  );
+
+  const promptSelfieSource = useCallback(() => {
+    // react-native-web: Alert with action buttons is unreliable (often no UI).
+    // Open the file picker immediately; native keeps the camera vs library sheet.
+    if (Platform.OS === 'web') {
+      void pickSelfie(false);
+      return;
+    }
+    Alert.alert(
+      'Generate your avatar',
+      'Choose a photo source',
+      [
+        { text: 'Take selfie', onPress: () => void pickSelfie(true) },
+        { text: 'Choose from library', onPress: () => void pickSelfie(false) },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }, [pickSelfie]);
 
   // --- Discard helpers ---
   const discardPersonal = () => {
@@ -680,10 +795,47 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
         {/* ---- Avatar ---- */}
         <SectionHeader title="Avatar" />
         <View style={s.card}>
-          <AvatarPreview avatar={avatar} skinTone={skinTone} />
-          <Pressable onPress={() => setAvatarModalOpen(true)} style={[s.btn, s.btnOutline, { marginTop: 14 }]}>
-            <Text style={[s.btnText, s.btnOutlineText]}>Edit Avatar</Text>
-          </Pressable>
+          <AvatarPreview
+            avatar={avatar}
+            skinTone={skinTone}
+            imageUri={avatarImageUrl}
+          />
+          {!gender ? (
+            <Text style={s.avatarHint}>
+              Set your gender under Personal info so generated portraits match you more reliably.
+            </Text>
+          ) : null}
+
+          {/* Generation status / error */}
+          {avatarGenerating ? (
+            <View style={s.avatarGeneratingRow}>
+              <ActivityIndicator color={palette.accent} size="small" />
+              <Text style={s.avatarGeneratingText}>Generating your avatar…</Text>
+            </View>
+          ) : null}
+          {avatarError ? (
+            <Text style={s.avatarErrorText}>{avatarError}</Text>
+          ) : null}
+
+          {/* Action buttons */}
+          <View style={[s.saveBar, { marginTop: 14 }]}>
+            <Pressable
+              onPress={promptSelfieSource}
+              style={[s.btn, s.btnPrimary]}
+              disabled={avatarGenerating}
+            >
+              <Text style={[s.btnText, s.btnPrimaryText]}>
+                {avatarImageUrl ? 'Regenerate from selfie' : 'Generate from selfie'}
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setAvatarModalOpen(true)}
+              style={[s.btn, s.btnGhost]}
+              disabled={avatarGenerating}
+            >
+              <Text style={[s.btnText, s.btnGhostText]}>Edit details</Text>
+            </Pressable>
+          </View>
         </View>
 
         <View style={{ height: 40 }} />
@@ -984,5 +1136,35 @@ const s = StyleSheet.create({
     paddingVertical: 16,
     borderTopWidth: 1,
     borderTopColor: palette.line,
+  },
+  avatarImageThumb: {
+    width: 88,
+    height: 88,
+    borderRadius: radius.md,
+    backgroundColor: palette.bgAlt,
+  },
+  avatarGeneratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  avatarGeneratingText: {
+    fontSize: 13,
+    color: palette.muted,
+    fontFamily: type.body,
+  },
+  avatarErrorText: {
+    marginTop: 10,
+    fontSize: 12,
+    color: palette.error,
+    fontFamily: type.body,
+  },
+  avatarHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: palette.muted,
+    fontFamily: type.body,
+    lineHeight: 17,
   },
 });
