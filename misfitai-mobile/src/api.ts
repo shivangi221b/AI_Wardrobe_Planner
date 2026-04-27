@@ -1265,20 +1265,30 @@ export async function generateAvatar(
 // Outfit preview generation
 // ---------------------------------------------------------------------------
 
+export interface OutfitPreviewGarment {
+  url: string;
+  name: string;
+  category: string;
+}
+
 /**
- * Generate (or retrieve a cached) full-body avatar illustration wearing the
- * specified outfit. The server caches by ``outfitId`` so repeated calls for the
- * same outfit return the stored image instantly.
+ * Build (or retrieve a cached) outfit preview by compositing the user's stored
+ * avatar portrait with their actual garment photos server-side.
  *
- * @param userId            Authenticated user id.
- * @param outfitId          Stable outfit id (``DayRecommendation.outfit.id``).
- * @param outfitDescription Human-readable outfit description built from garment names/colours.
- * @returns                 The public URL of the generated preview image.
+ * No AI generation — the server uses PIL to stitch the real images together, so
+ * the face and clothes are always exactly correct.
+ *
+ * @param userId          Authenticated user id.
+ * @param outfitId        Stable outfit id used as the server-side cache key.
+ * @param avatarImageUrl  Resolved public URL of the user's avatar portrait.
+ * @param garmentImages   Ordered garment images (outerwear → top → bottom → shoes).
+ * @returns               The public URL of the composite preview image.
  */
 export async function generateOutfitPreview(
   userId: string,
   outfitId: string,
-  outfitDescription: string,
+  avatarImageUrl: string,
+  garmentImages: OutfitPreviewGarment[],
 ): Promise<string> {
   if (USE_MOCK_API) {
     return `https://ui-avatars.com/api/?name=${encodeURIComponent(outfitId)}&size=512&background=1b1b19&color=f4f4f2&rounded=true`;
@@ -1289,7 +1299,15 @@ export async function generateOutfitPreview(
     {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ outfit_id: outfitId, outfit_description: outfitDescription }),
+      body: JSON.stringify({
+        outfit_id: outfitId,
+        avatar_image_url: avatarImageUrl,
+        garment_images: garmentImages.map((g) => ({
+          url: g.url,
+          name: g.name,
+          category: g.category,
+        })),
+      }),
     }
   );
 

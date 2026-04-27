@@ -18,7 +18,7 @@ import type { DayOfWeek, GarmentCategory } from './types';
 import { palette, radius, type } from './theme';
 import { OutfitAvatarPreview, type CollagePiece } from './OutfitAvatarPreview';
 import { OutfitDetailModal } from './OutfitDetailModal';
-import { generateOutfitPreview, API_BASE_URL } from './api';
+import { generateOutfitPreview, API_BASE_URL, type OutfitPreviewGarment } from './api';
 import {
   trackOutfitAvatarPreviewOpen,
   trackOutfitAccepted,
@@ -62,14 +62,6 @@ function resolveAvatarUri(url: string): string {
   if (/^https?:\/\//i.test(pathPart)) return `${pathPart}${query}`;
   if (pathPart.startsWith('/')) return `${API_BASE_URL}${pathPart}${query}`;
   return url;
-}
-
-/** Build a human-readable description of the outfit for the AI generation prompt. */
-function buildOutfitDescription(pieces: CollagePiece[]): string {
-  return pieces
-    .filter((p) => !p.hidden)
-    .map((p) => p.name)
-    .join(', ');
 }
 
 // ---------------------------------------------------------------------------
@@ -278,15 +270,32 @@ export function WeeklyPlanScreen({
   const currentCompositeUrl = currentOutfitId ? (compositeCache[currentOutfitId] ?? null) : null;
 
   const handleGenerateComposite = async () => {
-    if (!currentOutfitId || generatingComposite) return;
-    const description = buildOutfitDescription(collagePieces);
-    if (!description) return;
+    if (!currentOutfitId || generatingComposite || !avatarImageUrl) return;
+
+    // Build the list of garment images with real URLs only
+    const garmentImages: OutfitPreviewGarment[] = collagePieces
+      .filter((p) => !p.hidden)
+      .map((p) => {
+        const src = p.image;
+        const url =
+          typeof src === 'object' && src !== null && !Array.isArray(src) && 'uri' in src
+            ? (src as { uri: string }).uri
+            : '';
+        return { url, name: p.name, category: p.category ?? 'top' };
+      })
+      .filter((g) => g.url.startsWith('http'));
+
+    if (garmentImages.length === 0) {
+      Alert.alert('No garment images', 'Add photos to your wardrobe items to enable outfit preview.');
+      return;
+    }
+
     setGeneratingComposite(true);
     try {
-      const url = await generateOutfitPreview(userId, currentOutfitId, description);
+      const url = await generateOutfitPreview(userId, currentOutfitId, avatarImageUrl, garmentImages);
       setCompositeCache((prev) => ({ ...prev, [currentOutfitId]: url }));
     } catch {
-      Alert.alert('Preview unavailable', 'Could not generate the outfit preview. Please try again later.');
+      Alert.alert('Preview unavailable', 'Could not build the outfit preview. Please try again later.');
     } finally {
       setGeneratingComposite(false);
     }

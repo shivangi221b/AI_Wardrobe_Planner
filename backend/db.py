@@ -546,29 +546,42 @@ def increment_recommendation_counts(garment_ids: List[str], user_id: str) -> Non
         ]
         return
     client = get_supabase_client()
+    _rpc_missing: set[str] = set()   # module-level cache; populated on first 404
     for gid, delta in counts.items():
-        try:
-            client.rpc(
-                "increment_garment_recommended",
-                {"garment_id": gid, "delta": delta},
-            ).execute()
-        except Exception:
-            # RPC may not exist yet — fall back to a read-modify-write.
+        rpc_name = "increment_garment_recommended"
+        if rpc_name not in _rpc_missing:
             try:
-                result = (
-                    client.table(_table_name())
-                    .select("times_recommended")
-                    .eq("id", gid)
-                    .eq("user_id", user_id)
-                    .maybe_single()
-                    .execute()
-                )
-                current = int((result.data or {}).get("times_recommended") or 0)
-                client.table(_table_name()).update(
-                    {"times_recommended": current + delta}
-                ).eq("id", gid).eq("user_id", user_id).execute()
-            except Exception:
-                logger.exception("Failed to increment times_recommended for garment %s", gid)
+                client.rpc(rpc_name, {"garment_id": gid, "delta": delta}).execute()
+                continue
+            except Exception as rpc_exc:
+                msg = str(rpc_exc).lower()
+                # PGRST202 = function not found; log once then fall back silently.
+                if "pgrst202" in msg or "could not find" in msg:
+                    logger.warning(
+                        "db: RPC '%s' not found in schema cache — using read-modify-write fallback. "
+                        "Run scripts/sql/increment_garment_recommended.sql in the Supabase SQL editor "
+                        "to create the function and eliminate this fallback.",
+                        rpc_name,
+                    )
+                    _rpc_missing.add(rpc_name)
+                else:
+                    logger.warning("db: RPC '%s' failed: %s", rpc_name, rpc_exc)
+        # Read-modify-write fallback (non-atomic but acceptable for recommendation counts).
+        try:
+            result = (
+                client.table(_table_name())
+                .select("times_recommended")
+                .eq("id", gid)
+                .eq("user_id", user_id)
+                .maybe_single()
+                .execute()
+            )
+            current = int((result.data or {}).get("times_recommended") or 0)
+            client.table(_table_name()).update(
+                {"times_recommended": current + delta}
+            ).eq("id", gid).eq("user_id", user_id).execute()
+        except Exception:
+            logger.exception("Failed to increment times_recommended for garment %s", gid)
 
 
 def set_garment_hidden(garment_id: str, user_id: str, hidden: bool) -> Optional[GarmentItem]:
@@ -850,6 +863,9 @@ def store_avatar_image(user_id: str, image_bytes: bytes) -> str:
         raise
 
 
+_OUTFIT_PREVIEW_VERSION = "v7"   # bump when composite layout changes to bust old cached files
+
+
 def get_outfit_preview_url(user_id: str, outfit_id: str) -> str | None:
     """
     Return the public URL of an already-generated outfit preview, or ``None``
@@ -857,21 +873,21 @@ def get_outfit_preview_url(user_id: str, outfit_id: str) -> str | None:
     """
     safe_uid = re.sub(r"[^A-Za-z0-9_\-]", "_", user_id)[:128]
     safe_oid = re.sub(r"[^A-Za-z0-9_\-]", "_", outfit_id)[:128]
+    versioned_oid = f"{_OUTFIT_PREVIEW_VERSION}_{safe_oid}"
 
     if _use_local_store():
-        dest = _LOCAL_AVATARS_DIR / "outfit-previews" / safe_uid / f"{safe_oid}.jpg"
+        dest = _LOCAL_AVATARS_DIR / "outfit-previews" / safe_uid / f"{versioned_oid}.jpg"
         if dest.exists():
-            return f"/assets/local-avatars/outfit-previews/{safe_uid}/{safe_oid}.jpg"
+            return f"/assets/local-avatars/outfit-previews/{safe_uid}/{versioned_oid}.jpg"
         return None
 
-    storage_path = f"{safe_uid}/outfit-previews/{safe_oid}.jpg"
+    storage_path = f"{safe_uid}/outfit-previews/{versioned_oid}.jpg"
     bucket = _AVATAR_BUCKET()
     try:
         client = get_supabase_client()
-        # A lightweight existence check — list with a prefix filter.
         result = client.storage.from_(bucket).list(path=f"{safe_uid}/outfit-previews")
         names = [obj.get("name", "") for obj in (result or [])]
-        if f"{safe_oid}.jpg" in names:
+        if f"{versioned_oid}.jpg" in names:
             return str(client.storage.from_(bucket).get_public_url(storage_path))
     except Exception:
         logger.debug("get_outfit_preview_url: check failed, will regenerate")
@@ -880,23 +896,27 @@ def get_outfit_preview_url(user_id: str, outfit_id: str) -> str | None:
 
 def store_outfit_preview_image(user_id: str, outfit_id: str, image_bytes: bytes) -> str:
     """
-    Persist a generated outfit-on-avatar JPEG at a deterministic path keyed by
-    ``(user_id, outfit_id)`` and return its public URL.
+    Persist a generated outfit-on-avatar JPEG at a deterministic, versioned path
+    keyed by ``(user_id, outfit_id)`` and return its public URL.
 
-    Local mode  → ``outputs/local_avatars/outfit-previews/{user_id}/{outfit_id}.jpg``
-    Supabase    → ``{user_id}/outfit-previews/{outfit_id}.jpg`` in the avatar bucket.
+    Local mode  → ``outputs/local_avatars/outfit-previews/{user_id}/{version}_{outfit_id}.jpg``
+    Supabase    → ``{user_id}/outfit-previews/{version}_{outfit_id}.jpg`` in the avatar bucket.
+
+    Bump ``_OUTFIT_PREVIEW_VERSION`` whenever the composite layout changes to
+    force regeneration of all existing cached previews.
     """
     safe_uid = re.sub(r"[^A-Za-z0-9_\-]", "_", user_id)[:128]
     safe_oid = re.sub(r"[^A-Za-z0-9_\-]", "_", outfit_id)[:128]
+    versioned_oid = f"{_OUTFIT_PREVIEW_VERSION}_{safe_oid}"
 
     if _use_local_store():
         dest_dir = _LOCAL_AVATARS_DIR / "outfit-previews" / safe_uid
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / f"{safe_oid}.jpg"
+        dest = dest_dir / f"{versioned_oid}.jpg"
         dest.write_bytes(image_bytes)
-        return f"/assets/local-avatars/outfit-previews/{safe_uid}/{safe_oid}.jpg"
+        return f"/assets/local-avatars/outfit-previews/{safe_uid}/{versioned_oid}.jpg"
 
-    storage_path = f"{safe_uid}/outfit-previews/{safe_oid}.jpg"
+    storage_path = f"{safe_uid}/outfit-previews/{versioned_oid}.jpg"
     bucket = _AVATAR_BUCKET()
     try:
         client = get_supabase_client()
