@@ -267,3 +267,46 @@ async def generate_outfit_explanation(
             exc,
         )
         return _FALLBACK_TEMPLATE.format(day=day, event_type=event_label)
+
+
+_RANK_GAPS_PROMPT = """You rank wardrobe "gaps" (missing pieces) for a shopping assistant.
+Input is JSON with inventory counts, calendar week_weights, and a gaps list (each has gap_id, title, reason, priority).
+Return ONLY a JSON array of gap_id strings: best order for impact, using every gap_id from the input exactly once.
+No markdown, no explanation."""
+
+
+async def rank_shop_gap_ids(structured_json: str) -> Optional[list[str]]:
+    """
+    Optionally reorder gap ids via Gemini when ``SHOP_GAP_LLM_RANK`` is truthy.
+    Returns ``None`` when disabled, client unavailable, or parsing fails.
+    """
+    flag = os.getenv("SHOP_GAP_LLM_RANK", "").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        return None
+    client = _gemini_client()
+    if client is None:
+        return None
+    try:
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=_model,
+            contents=[
+                types.Part.from_text(text=_RANK_GAPS_PROMPT),
+                types.Part.from_text(text=structured_json),
+            ],
+            config=types.GenerateContentConfig(max_output_tokens=256, temperature=0.2),
+        )
+        raw = (response.text or "").strip()
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:].lstrip()
+        import json
+
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        return [str(x) for x in data]
+    except Exception as exc:
+        logger.warning("rank_shop_gap_ids failed: %s", exc)
+        return None

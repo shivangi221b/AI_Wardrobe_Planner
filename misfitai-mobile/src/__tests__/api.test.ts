@@ -177,6 +177,8 @@ describe('updateUserProfile (mock mode)', () => {
     expect(result).toHaveProperty('userId');
     expect(result).toHaveProperty('favoriteColors');
     expect(Array.isArray(result.favoriteColors)).toBe(true);
+    expect(result).toHaveProperty('favoriteBrands');
+    expect(Array.isArray(result.favoriteBrands)).toBe(true);
   });
 });
 

@@ -17,6 +17,23 @@ from ..models import AvatarConfig, UserProfile
 
 router = APIRouter(prefix="/users", tags=["profile"])
 
+_MAX_FAVORITE_BRANDS = 12
+_MAX_BRAND_LEN = 60
+
+
+def _sanitize_favorite_brands(raw: Optional[List[str]]) -> Optional[List[str]]:
+    if raw is None:
+        return None
+    out: List[str] = []
+    for x in raw[:_MAX_FAVORITE_BRANDS]:
+        s = (str(x) if x is not None else "").strip()
+        if not s:
+            continue
+        if len(s) > _MAX_BRAND_LEN:
+            s = s[:_MAX_BRAND_LEN]
+        out.append(s)
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Request / response bodies
@@ -50,6 +67,7 @@ class UserProfileBody(BaseModel):
     color_tone: Optional[str] = None
     favorite_colors: Optional[List[str]] = None
     avoided_colors: Optional[List[str]] = None
+    favorite_brands: Optional[List[str]] = None
     shoe_size: Optional[str] = None
     top_size: Optional[str] = None
     bottom_size: Optional[str] = None
@@ -101,6 +119,9 @@ async def update_profile(user_id: str, body: UserProfileBody) -> UserProfile:
     ):
         if field in body.model_fields_set:
             data[field] = getattr(body, field)
+
+    if "favorite_brands" in body.model_fields_set:
+        data["favorite_brands"] = _sanitize_favorite_brands(body.favorite_brands)
 
     # avatar_config: null clears it; a non-null object merges only keys that appear in the body.
     if "avatar_config" in body.model_fields_set:

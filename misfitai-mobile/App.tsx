@@ -7,6 +7,7 @@ import { WardrobeScreen } from './src/WardrobeScreen';
 import { EventsScreen } from './src/EventsScreen';
 import { WeeklyPlanScreen } from './src/WeeklyPlanScreen';
 import { ProfileScreen } from './src/ProfileScreen';
+import { ShopToCompleteScreen } from './src/ShopToCompleteScreen';
 import { generateAvatar, registerSignupWithBackend, updateUserProfile, USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
@@ -39,7 +40,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 
 const SESSION_STORAGE_KEY = '@misfitai/session';
 
-type Tab = 'wardrobe' | 'events' | 'plan' | 'profile';
+type Tab = 'wardrobe' | 'events' | 'plan' | 'profile' | 'shop';
 
 type Session = {
   provider: AuthProvider;
@@ -122,8 +123,14 @@ function AppContent({
 }) {
   const [tab, setTab] = useState<Tab>('wardrobe');
   const [tabHint, setTabHint] = useState<string | null>(null);
-  const { generateRecommendations, garments, isCalendarConnected, eventsByDay, recommendations } =
-    useAppState();
+  const {
+    generateRecommendations,
+    garments,
+    isCalendarConnected,
+    eventsByDay,
+    recommendations,
+    refreshWardrobe,
+  } = useAppState();
 
   const wardrobeStepComplete =
     garments.some((item) => item.category === 'top') &&
@@ -278,6 +285,13 @@ function AppContent({
             displayName={session.profile?.displayName}
           />
         ) : null}
+
+        {tab === 'shop' ? (
+          <ShopToCompleteScreen
+            userId={session.userId}
+            onWardrobeUpdated={refreshWardrobe}
+          />
+        ) : null}
       </View>
 
       <View style={styles.navBar}>
@@ -285,6 +299,7 @@ function AppContent({
           { key: 'wardrobe', label: 'Wardrobe' },
           { key: 'events', label: 'Calendar' },
           { key: 'plan', label: 'Outfits' },
+          { key: 'shop', label: 'Shop' },
           { key: 'profile', label: 'Profile' },
         ] as const).map((item) => {
           const active = tab === item.key;
