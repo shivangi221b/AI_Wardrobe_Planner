@@ -84,7 +84,7 @@ export function OutfitAvatarPreview({
             transition={220}
           />
           <View style={styles.compositeBadge}>
-            <Text style={styles.compositeBadgeText}>AI try-on ✦</Text>
+            <Text style={styles.compositeBadgeText}>Outfit preview ✦</Text>
           </View>
         </View>
       ) : (
@@ -154,7 +154,7 @@ export function OutfitAvatarPreview({
         </View>
       )}
 
-      <Text style={styles.tapHint}>Tap to expand · Long press item to hide</Text>
+      <Text style={styles.tapHint}>Tap to expand · Long press in detail view to hide items</Text>
     </Pressable>
   );
 }

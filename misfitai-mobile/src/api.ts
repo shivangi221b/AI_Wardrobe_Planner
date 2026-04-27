@@ -1272,17 +1272,18 @@ export interface OutfitPreviewGarment {
 }
 
 /**
- * Build (or retrieve a cached) outfit preview by compositing the user's stored
- * avatar portrait with their actual garment photos server-side.
+ * Build (or retrieve a cached) outfit preview showing the user's avatar wearing
+ * the recommended outfit items.
  *
- * No AI generation — the server uses PIL to stitch the real images together, so
- * the face and clothes are always exactly correct.
+ * The server first attempts AI generation (Imagen / Gemini multimodal); PIL
+ * side-by-side compositing is used as a deterministic fallback if AI is
+ * unavailable or returns no image.
  *
  * @param userId          Authenticated user id.
  * @param outfitId        Stable outfit id used as the server-side cache key.
  * @param avatarImageUrl  Resolved public URL of the user's avatar portrait.
  * @param garmentImages   Ordered garment images (outerwear → top → bottom → shoes).
- * @returns               The public URL of the composite preview image.
+ * @returns               The public URL of the generated or composited preview image.
  */
 export async function generateOutfitPreview(
   userId: string,

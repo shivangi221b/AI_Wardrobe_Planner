@@ -32,6 +32,8 @@ from typing import Sequence
 import httpx
 from PIL import Image
 
+from .llm import _is_safe_image_url
+
 logger = logging.getLogger(__name__)
 
 _MAX_BYTES = 10 * 1024 * 1024   # 10 MB per image
@@ -44,6 +46,9 @@ _HTTP_TIMEOUT = 15.0
 
 async def _fetch_bytes(url: str, client: httpx.AsyncClient) -> bytes | None:
     if not url.strip():
+        return None
+    if not _is_safe_image_url(url):
+        logger.warning("outfit_on_avatar: blocked unsafe URL url=%s", url)
         return None
     try:
         resp = await client.get(url, timeout=_HTTP_TIMEOUT, follow_redirects=True)

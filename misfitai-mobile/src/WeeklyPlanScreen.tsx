@@ -151,7 +151,9 @@ export function WeeklyPlanScreen({
         trackOutfitAccepted(selectedRecommendation.day, selectedRecommendation.eventType);
       }
     }
-    onMeEntryTime.current = null;
+    // Reset entry time; immediately restart it if still in "on-me" mode so
+    // acceptance tracking fires correctly for the newly selected day too.
+    onMeEntryTime.current = viewMode === 'on-me' ? Date.now() : null;
     setSelectedDay(day);
   };
 

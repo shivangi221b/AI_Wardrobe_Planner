@@ -39,6 +39,10 @@ _local_signup_user_ids: set[str] = set()
 # Email/password users when Supabase is unavailable or table writes fall back (see create_password_user).
 _local_app_users_by_email: dict[str, dict[str, str]] = {}
 
+# RPC names that were not found in the Supabase schema cache (populated on first 404).
+# Module-level so the "log once" warning actually fires only once per process lifetime.
+_rpc_missing: set[str] = set()
+
 
 class PasswordUserRow(TypedDict):
     user_id: str
@@ -546,7 +550,6 @@ def increment_recommendation_counts(garment_ids: List[str], user_id: str) -> Non
         ]
         return
     client = get_supabase_client()
-    _rpc_missing: set[str] = set()   # module-level cache; populated on first 404
     for gid, delta in counts.items():
         rpc_name = "increment_garment_recommended"
         if rpc_name not in _rpc_missing:

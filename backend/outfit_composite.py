@@ -6,7 +6,7 @@ single JPEG that places the avatar portrait on the left and a layered grid of th
 actual garment photos on the right — no AI generation, no text prompts, no
 invented faces or clothes.
 
-Layout (default 640 × 480 px output):
+Layout (default 900 × 300 px output, 3:1 ratio):
   ┌─────────────┬──────────────────────┐
   │             │  [garment 1]         │
   │  avatar     │  [garment 2]         │
@@ -47,6 +47,11 @@ _HTTP_TIMEOUT = 12.0                      # seconds
 # ---------------------------------------------------------------------------
 # Image fetching
 # ---------------------------------------------------------------------------
+
+async def _none_image() -> None:
+    """Placeholder coroutine that returns None for garment items with no URL."""
+    return None
+
 
 async def _fetch_image(url: str, client: httpx.AsyncClient) -> Image.Image | None:
     """Download *url* and decode to a PIL Image. Returns None on any error."""
@@ -132,8 +137,8 @@ async def build_outfit_composite(
         avatar_url:     Public URL of the user's stored avatar portrait.
         garment_items:  Ordered list of dicts with keys ``url``, ``name``, ``category``.
                         Items should be sorted outerwear → top → dress → bottom → shoes → accessory.
-        output_w:       Output image width in pixels (default 640).
-        output_h:       Output image height in pixels (default 480).
+        output_w:       Output image width in pixels (default 900).
+        output_h:       Output image height in pixels (default 300).
 
     Returns:
         JPEG bytes of the composite image.
@@ -146,7 +151,7 @@ async def build_outfit_composite(
         tasks = [_fetch_image(avatar_url, client)]
         for item in garment_items:
             url = (item.get("url") or "").strip()
-            tasks.append(_fetch_image(url, client) if url else asyncio.coroutine(lambda: None)())
+            tasks.append(_fetch_image(url, client) if url else _none_image())
         results = await asyncio.gather(*tasks, return_exceptions=False)
 
     avatar_img = results[0] if results else None
@@ -184,7 +189,7 @@ async def build_outfit_composite(
     if n > 0:
         # Always use 2 display columns so each cell is wide enough to show the photo
         cols = 2
-        rows = min(n, 4) if n > 2 else 1  # 1 row for 1-2 items, 2 rows for 3-4
+        rows = 2 if n > 2 else 1  # 1 row for 1-2 items, 2 rows for 3-4
         if n <= 2:
             cols = n  # spread single row evenly
 

@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from PIL import Image
 
 from ..avatar_gen import generate_avatar_image
+from ..llm import _is_safe_image_url
 from ..db import (
     get_outfit_preview_url,
     get_user_profile,
@@ -206,6 +207,8 @@ async def generate_outfit_preview(
         raise HTTPException(status_code=422, detail="outfit_id must not be empty.")
     if not body.avatar_image_url.strip():
         raise HTTPException(status_code=422, detail="avatar_image_url must not be empty.")
+    if not _is_safe_image_url(body.avatar_image_url):
+        raise HTTPException(status_code=422, detail="avatar_image_url is not a valid or permitted URL.")
 
     # Return the cached composite if it already exists.
     cached_url = get_outfit_preview_url(user_id, body.outfit_id)
@@ -227,20 +230,26 @@ async def generate_outfit_preview(
     garment_dicts = [
         {"url": g.url, "name": g.name, "category": g.category}
         for g in body.garment_images
-        if g.url.strip()
+        if g.url.strip() and _is_safe_image_url(g.url)
     ]
+
+    if not garment_dicts:
+        raise HTTPException(
+            status_code=422,
+            detail="No valid garment image URLs were provided. Ensure garment photos have public URLs.",
+        )
 
     try:
         jpeg_bytes = await generate_outfit_on_avatar(
             avatar_url=body.avatar_image_url,
             garment_items=garment_dicts,
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("outfit_on_avatar failed for user_id=%s", user_id)
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to generate outfit preview: {exc}",
-        ) from exc
+            detail="Failed to generate outfit preview.",
+        ) from None
 
     try:
         preview_url = store_outfit_preview_image(user_id, body.outfit_id, jpeg_bytes)
