@@ -268,6 +268,23 @@ export interface WeekEventsRequest {
   }[];
 }
 
+export interface RecommendationPinConstraint {
+  day: DayOfWeek;
+  pinWholeOutfit?: boolean;
+  topId?: string | null;
+  bottomId?: string | null;
+  dressId?: string | null;
+}
+
+export interface RecommendationChoicePayload {
+  userId: string;
+  day: DayOfWeek;
+  chosenVariantId: string;
+  sourceType: 'original' | 'regenerated';
+  pinWholeOutfit: boolean;
+  pinnedPieceKeys: string[];
+}
+
 export class ApiError extends Error {
   status: number;
   body: string;
@@ -966,6 +983,7 @@ export async function getWeeklyRecommendations(
   userId: string,
   events: CalendarEvent[],
   userGender?: string | null,
+  pinConstraints?: RecommendationPinConstraint[],
 ): Promise<{ recommendations: DayRecommendation[] }> {
   if (USE_MOCK_API) {
     return mockGetWeeklyRecommendations(userId, events);
@@ -982,6 +1000,13 @@ export async function getWeeklyRecommendations(
         day: event.day,
         event_type: eventTypeForApi(event.eventType),
       })),
+      pin_constraints: (pinConstraints || []).map((constraint) => ({
+        day: constraint.day,
+        pin_whole_outfit: Boolean(constraint.pinWholeOutfit),
+        top_id: constraint.topId ?? undefined,
+        bottom_id: constraint.bottomId ?? undefined,
+        dress_id: constraint.dressId ?? undefined,
+      })),
     }),
   });
 
@@ -991,6 +1016,25 @@ export async function getWeeklyRecommendations(
   return {
     recommendations: recs.map(mapRecommendation),
   };
+}
+
+export async function trackRecommendationChoice(
+  payload: RecommendationChoicePayload
+): Promise<void> {
+  if (USE_MOCK_API) {
+    return;
+  }
+  await requestJson<unknown>('/analytics/recommendation-choice', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: payload.userId,
+      day: payload.day,
+      chosen_variant_id: payload.chosenVariantId,
+      source_type: payload.sourceType,
+      pin_whole_outfit: payload.pinWholeOutfit,
+      pinned_piece_keys: payload.pinnedPieceKeys,
+    }),
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -77,7 +77,18 @@ export function WeeklyPlanScreen({
   onNavigateToWardrobe?: () => void;
   onBackToCalendar?: () => void;
 }) {
-  const { garments, recommendations, toggleGarmentHidden, userProfile, userId } = useAppState();
+  const {
+    garments,
+    recommendations,
+    recommendationSets,
+    toggleGarmentHidden,
+    regenerateRecommendationsWithPins,
+    setSelectedRecommendationVariant,
+    setPinWholeOutfit,
+    setPinPiece,
+    userProfile,
+    userId,
+  } = useAppState();
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('monday');
@@ -111,17 +122,42 @@ export function WeeklyPlanScreen({
   }, [avatarImageUrl]);
 
   useEffect(() => {
-    if (recommendations.length === 0) return;
-    const selectedExists = recommendations.some((item) => item.day === selectedDay);
+    const sourceDays =
+      recommendationSets.length > 0
+        ? recommendationSets.map((item) => item.day)
+        : recommendations.map((item) => item.day);
+    if (sourceDays.length === 0) return;
+    const selectedExists = sourceDays.includes(selectedDay);
     if (!selectedExists) {
-      setSelectedDay(recommendations[0].day);
+      setSelectedDay(sourceDays[0]);
     }
-  }, [recommendations, selectedDay]);
+  }, [recommendationSets, recommendations, selectedDay]);
+
+  const selectedRecommendationSet = useMemo(() => {
+    if (recommendationSets.length === 0) {
+      return null;
+    }
+    return recommendationSets.find((item) => item.day === selectedDay) || recommendationSets[0];
+  }, [recommendationSets, selectedDay]);
+
+  const selectedVariant = useMemo(() => {
+    if (!selectedRecommendationSet) {
+      return null;
+    }
+    return (
+      selectedRecommendationSet.variants.find(
+        (item) => item.id === selectedRecommendationSet.selectedVariantId
+      ) || selectedRecommendationSet.variants[0]
+    );
+  }, [selectedRecommendationSet]);
 
   const selectedRecommendation = useMemo(() => {
+    if (selectedVariant?.recommendation) {
+      return selectedVariant.recommendation;
+    }
     if (recommendations.length === 0) return null;
     return recommendations.find((item) => item.day === selectedDay) || recommendations[0];
-  }, [recommendations, selectedDay]);
+  }, [selectedVariant, recommendations, selectedDay]);
 
   // Animate card whenever the day changes
   useEffect(() => {
@@ -172,7 +208,11 @@ export function WeeklyPlanScreen({
     try {
       setRegenerating(true);
       setError(null);
-      await onRegenerateWeek();
+      if (recommendationSets.length === 0) {
+        await onRegenerateWeek();
+      } else {
+        await regenerateRecommendationsWithPins();
+      }
     } catch {
       setError('Failed to regenerate week.');
     } finally {
@@ -355,7 +395,9 @@ export function WeeklyPlanScreen({
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dayTabs}>
               {dayOrder.map((day) => {
                 const active = selectedDay === day;
-                const hasRecommendation = recommendations.some((item) => item.day === day);
+                const hasRecommendation =
+                  recommendationSets.some((item) => item.day === day) ||
+                  recommendations.some((item) => item.day === day);
                 return (
                   <Pressable
                     key={day}
@@ -364,6 +406,32 @@ export function WeeklyPlanScreen({
                   >
                     <Text style={[styles.dayTabText, active && styles.dayTabTextActive]}>
                       {dayLabels[day].slice(0, 3)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.variantTabs}
+            >
+              {(selectedRecommendationSet?.variants || []).map((variant) => {
+                const active = selectedVariant?.id === variant.id;
+                return (
+                  <Pressable
+                    key={variant.id}
+                    onPress={() => {
+                      setError(null);
+                      setSelectedRecommendationVariant(selectedRecommendationSet!.day, variant.id).catch(() => {
+                        setError('Could not save selected option.');
+                      });
+                    }}
+                    style={[styles.variantTab, active && styles.variantTabActive]}
+                  >
+                    <Text style={[styles.variantTabText, active && styles.variantTabTextActive]}>
+                      {variant.label}
                     </Text>
                   </Pressable>
                 );
@@ -386,7 +454,55 @@ export function WeeklyPlanScreen({
                 },
               ]}
             >
-              <Text style={styles.lookHeading}>Recommended outfit</Text>
+              <Text style={styles.lookHeading}>{selectedVariant?.label || 'Recommended outfit'}</Text>
+              <Text style={styles.lookMeta}>
+                {selectedVariant?.sourceType === 'original' ? 'First suggestion' : 'Regenerated suggestion'}
+              </Text>
+
+              {selectedVariant ? (
+                <View style={styles.pinRow}>
+                  <Pressable
+                    style={[styles.pinChip, selectedVariant.pinWholeOutfit && styles.pinChipActive]}
+                    onPress={() =>
+                      setPinWholeOutfit(
+                        selectedRecommendationSet!.day,
+                        selectedVariant.id,
+                        !selectedVariant.pinWholeOutfit
+                      )
+                    }
+                  >
+                    <Text style={[styles.pinChipText, selectedVariant.pinWholeOutfit && styles.pinChipTextActive]}>
+                      {selectedVariant.pinWholeOutfit ? 'Whole outfit pinned' : 'Pin whole outfit'}
+                    </Text>
+                  </Pressable>
+                  {(['top', 'bottom', 'dress'] as const).map((piece) => (
+                    <Pressable
+                      key={piece}
+                      style={[
+                        styles.pinChip,
+                        selectedVariant.pinnedPieces[piece] && styles.pinChipActive,
+                      ]}
+                      onPress={() =>
+                        setPinPiece(
+                          selectedRecommendationSet!.day,
+                          selectedVariant.id,
+                          piece,
+                          !selectedVariant.pinnedPieces[piece]
+                        )
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.pinChipText,
+                          selectedVariant.pinnedPieces[piece] && styles.pinChipTextActive,
+                        ]}
+                      >
+                        {selectedVariant.pinnedPieces[piece] ? `Pinned ${piece}` : `Pin ${piece}`}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
               <Text style={styles.lookReason}>{selectedRecommendation.explanation}</Text>
 
               {/* View mode toggle — only show "On Me" when avatar exists */}
@@ -578,6 +694,30 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingRight: 8,
   },
+  variantTabs: {
+    gap: 8,
+    paddingRight: 8,
+  },
+  variantTab: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.line,
+    backgroundColor: palette.panelStrong,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  variantTabActive: {
+    borderColor: palette.accent,
+    backgroundColor: palette.accentSoft,
+  },
+  variantTabText: {
+    color: palette.inkSoft,
+    fontSize: 12,
+    fontFamily: type.bodyMedium,
+  },
+  variantTabTextActive: {
+    color: palette.accent,
+  },
   dayTab: {
     borderRadius: radius.pill,
     borderWidth: 1,
@@ -614,6 +754,37 @@ const styles = StyleSheet.create({
     lineHeight: 31,
     color: palette.ink,
     fontFamily: type.display,
+  },
+  lookMeta: {
+    marginTop: -8,
+    color: palette.muted,
+    fontSize: 12,
+    fontFamily: type.bodyMedium,
+  },
+  pinRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  pinChip: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: palette.panelStrong,
+  },
+  pinChipActive: {
+    borderColor: palette.accent,
+    backgroundColor: palette.accentSoft,
+  },
+  pinChipText: {
+    color: palette.inkSoft,
+    fontSize: 11,
+    fontFamily: type.bodyMedium,
+  },
+  pinChipTextActive: {
+    color: palette.accent,
   },
   lookReason: {
     color: palette.muted,

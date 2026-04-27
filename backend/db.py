@@ -36,6 +36,7 @@ _local_measurements: dict[str, BodyMeasurements] = {}
 _local_user_profiles: dict[str, UserProfile] = {}
 # OAuth logins (no Supabase Auth): POST /analytics/register fills this in local dev.
 _local_signup_user_ids: set[str] = set()
+_local_recommendation_choice_events: list[dict[str, Any]] = []
 # Email/password users when Supabase is unavailable or table writes fall back (see create_password_user).
 _local_app_users_by_email: dict[str, dict[str, str]] = {}
 
@@ -89,6 +90,10 @@ def _signup_registry_table() -> str:
 
 def _app_users_table() -> str:
     return (os.getenv("SUPABASE_APP_USERS_TABLE") or "app_users").strip() or "app_users"
+
+
+def _recommendation_choices_table() -> str:
+    return (os.getenv("SUPABASE_RECOMMENDATION_CHOICES_TABLE") or "recommendation_choice_events").strip() or "recommendation_choice_events"
 
 
 def normalize_login_email(email: str) -> str:
@@ -232,6 +237,37 @@ def count_registered_signups() -> int:
     except Exception:
         logger.exception("count_registered_signups failed")
         return 0
+
+
+def track_recommendation_choice(
+    *,
+    user_id: str,
+    day: str,
+    chosen_variant_id: str,
+    source_type: str,
+    pin_whole_outfit: bool = False,
+    pinned_piece_keys: Optional[list[str]] = None,
+) -> None:
+    """Record recommendation variant chosen by user (best-effort)."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return
+    payload = {
+        "user_id": uid,
+        "day": (day or "").strip(),
+        "chosen_variant_id": (chosen_variant_id or "").strip(),
+        "source_type": (source_type or "").strip() or "unknown",
+        "pin_whole_outfit": bool(pin_whole_outfit),
+        "pinned_piece_keys": list(pinned_piece_keys or []),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    if _use_local_store():
+        _local_recommendation_choice_events.append(payload)
+        return
+    try:
+        get_supabase_client().table(_recommendation_choices_table()).insert(payload).execute()
+    except Exception:
+        logger.exception("track_recommendation_choice failed user_id=%r", uid[:80])
 
 
 def _parse_category(value: Any) -> GarmentCategory:

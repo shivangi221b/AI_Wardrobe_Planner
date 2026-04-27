@@ -26,6 +26,23 @@ class TestRegisterSignup:
 
 
 @pytest.mark.usefixtures("_isolate_env")
+class TestRecommendationChoice:
+    async def test_tracks_choice_returns_204(self, client):
+        resp = await client.post(
+            "/analytics/recommendation-choice",
+            json={
+                "user_id": "test-user-1",
+                "day": "monday",
+                "chosen_variant_id": "monday-original-1",
+                "source_type": "original",
+                "pin_whole_outfit": False,
+                "pinned_piece_keys": ["top"],
+            },
+        )
+        assert resp.status_code == 204
+
+
+@pytest.mark.usefixtures("_isolate_env")
 class TestGetMetrics:
     async def test_no_auth_required_by_default(self, client):
         resp = await client.get("/analytics/metrics")

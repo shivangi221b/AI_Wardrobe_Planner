@@ -82,6 +82,29 @@ export interface DayRecommendation {
   explanation: string;
 }
 
+export type RecommendationSourceType = 'original' | 'regenerated';
+
+export interface RecommendationPinnedPieces {
+  top: boolean;
+  bottom: boolean;
+  dress: boolean;
+}
+
+export interface RecommendationVariant {
+  id: string;
+  label: string;
+  sourceType: RecommendationSourceType;
+  recommendation: DayRecommendation;
+  pinWholeOutfit: boolean;
+  pinnedPieces: RecommendationPinnedPieces;
+}
+
+export interface DayRecommendationSet {
+  day: DayOfWeek;
+  variants: RecommendationVariant[];
+  selectedVariantId: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // User profile (style preferences, sizes, avatar)
 // ---------------------------------------------------------------------------
