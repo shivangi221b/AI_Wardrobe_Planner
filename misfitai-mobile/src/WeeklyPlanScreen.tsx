@@ -86,6 +86,8 @@ export function WeeklyPlanScreen({
     setSelectedRecommendationVariant,
     setPinWholeOutfit,
     setPinPiece,
+    userProfile,
+    userId,
   } = useAppState();
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
