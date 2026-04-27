@@ -122,14 +122,16 @@ export function WeeklyPlanScreen({
   }, [avatarImageUrl]);
 
   useEffect(() => {
-    if (recommendationSets.length === 0) {
-      return;
-    }
-    const selectedExists = recommendationSets.some((item) => item.day === selectedDay);
+    const sourceDays =
+      recommendationSets.length > 0
+        ? recommendationSets.map((item) => item.day)
+        : recommendations.map((item) => item.day);
+    if (sourceDays.length === 0) return;
+    const selectedExists = sourceDays.includes(selectedDay);
     if (!selectedExists) {
-      setSelectedDay(recommendationSets[0].day);
+      setSelectedDay(sourceDays[0]);
     }
-  }, [recommendationSets, selectedDay]);
+  }, [recommendationSets, recommendations, selectedDay]);
 
   const selectedRecommendationSet = useMemo(() => {
     if (recommendationSets.length === 0) {
@@ -149,7 +151,13 @@ export function WeeklyPlanScreen({
     );
   }, [selectedRecommendationSet]);
 
-  const selectedRecommendation = selectedVariant?.recommendation ?? null;
+  const selectedRecommendation = useMemo(() => {
+    if (selectedVariant?.recommendation) {
+      return selectedVariant.recommendation;
+    }
+    if (recommendations.length === 0) return null;
+    return recommendations.find((item) => item.day === selectedDay) || recommendations[0];
+  }, [selectedVariant, recommendations, selectedDay]);
 
   // Animate card whenever the day changes
   useEffect(() => {
@@ -387,7 +395,9 @@ export function WeeklyPlanScreen({
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dayTabs}>
               {dayOrder.map((day) => {
                 const active = selectedDay === day;
-                const hasRecommendation = recommendationSets.some((item) => item.day === day);
+                const hasRecommendation =
+                  recommendationSets.some((item) => item.day === day) ||
+                  recommendations.some((item) => item.day === day);
                 return (
                   <Pressable
                     key={day}
