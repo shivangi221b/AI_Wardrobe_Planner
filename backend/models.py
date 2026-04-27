@@ -260,6 +260,16 @@ class WeekEvent(BaseModel):
     fetch a point-in-time weather forecast."""
 
 
+class PinnedRecommendationConstraint(BaseModel):
+    """Pin constraints for one day while regenerating recommendations."""
+
+    day: str
+    pin_whole_outfit: bool = False
+    top_id: Optional[str] = None
+    bottom_id: Optional[str] = None
+    dress_id: Optional[str] = None
+
+
 class WeekRecommendationRequest(BaseModel):
     """Request body for ``POST /recommendations/week``."""
 
@@ -270,6 +280,9 @@ class WeekRecommendationRequest(BaseModel):
     user_gender: Optional[str] = None
     """Gender identity of the user (``"male"``, ``"female"``, or ``"other"``).
     When provided, garments tagged for the opposite binary gender are excluded."""
+
+    pin_constraints: List[PinnedRecommendationConstraint] = []
+    """Optional per-day pin rules used during regeneration."""
 
 
 class DayOutfitSuggestion(BaseModel):

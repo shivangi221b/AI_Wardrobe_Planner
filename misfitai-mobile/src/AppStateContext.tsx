@@ -9,12 +9,15 @@ import React, {
 import type {
   BodyMeasurements,
   CalendarEvent,
+  DayRecommendationSet,
   DayOfWeek,
   DayRecommendation,
   EventType,
   Garment,
   GarmentSeasonality,
   GarmentFormality,
+  RecommendationPinnedPieces,
+  RecommendationVariant,
 } from './types';
 import { dayOrder } from './constants';
 import {
@@ -33,9 +36,12 @@ import {
   deleteGarment as apiDeleteGarment,
   setGarmentHidden as apiSetGarmentHidden,
   syncCalendarEvents as apiSyncCalendarEvents,
+  trackRecommendationChoice,
   type ConfirmSearchAddPayload,
   type GarmentSearchResult,
   type GarmentSearchOptions,
+  type RecommendationPinConstraint,
+  type RecommendationChoicePayload,
   type VisionAddPayload,
   type VisionPreviewItem,
   saveWeekEvents,
@@ -47,6 +53,7 @@ interface AppState {
   eventsByDay: Record<DayOfWeek, EventType>;
   summariesByDay: Record<DayOfWeek, string | undefined>;
   recommendations: DayRecommendation[];
+  recommendationSets: DayRecommendationSet[];
   isCalendarConnected: boolean;
   isLoadingWardrobe: boolean;
   wardrobeError: string | null;
@@ -61,6 +68,15 @@ interface AppState {
   useDemoWeek: () => void;
   syncCalendarEvents: () => Promise<void>;
   generateRecommendations: () => Promise<void>;
+  regenerateRecommendationsWithPins: () => Promise<void>;
+  setSelectedRecommendationVariant: (day: DayOfWeek, variantId: string) => Promise<void>;
+  setPinWholeOutfit: (day: DayOfWeek, variantId: string, pinned: boolean) => void;
+  setPinPiece: (
+    day: DayOfWeek,
+    variantId: string,
+    piece: keyof RecommendationPinnedPieces,
+    pinned: boolean
+  ) => void;
   addGarmentToWardrobe: (
     payload: {
       name: string;
@@ -113,6 +129,30 @@ function createInitialSummaries(): Record<DayOfWeek, string | undefined> {
   };
 }
 
+function emptyPinnedPieces(): RecommendationPinnedPieces {
+  return { top: false, bottom: false, dress: false };
+}
+
+function createVariantLabel(index: number): string {
+  return index === 0 ? 'First suggestion' : `Regenerated option ${index + 1}`;
+}
+
+function buildVariant(
+  recommendation: DayRecommendation,
+  index: number,
+  sourceType: 'original' | 'regenerated',
+  previous?: RecommendationVariant
+): RecommendationVariant {
+  return {
+    id: previous?.id ?? `${recommendation.day}-${sourceType}-${index}-${recommendation.outfit.id || 'outfit'}`,
+    label: createVariantLabel(index),
+    sourceType,
+    recommendation,
+    pinWholeOutfit: previous?.pinWholeOutfit ?? false,
+    pinnedPieces: previous?.pinnedPieces ?? emptyPinnedPieces(),
+  };
+}
+
 export function AppStateProvider({
   children,
   userId: userIdProp,
@@ -136,6 +176,7 @@ export function AppStateProvider({
   const [recommendations, setRecommendations] = useState<
     DayRecommendation[]
   >([]);
+  const [recommendationSets, setRecommendationSets] = useState<DayRecommendationSet[]>([]);
   const [isLoadingWardrobe, setIsLoadingWardrobe] = useState(false);
   const [wardrobeError, setWardrobeError] = useState<string | null>(null);
   const [measurements, setMeasurements] = useState<BodyMeasurements | null>(null);
@@ -287,20 +328,194 @@ export function AppStateProvider({
     }
   }, [userId, googleAccessToken]);
 
-  const generateRecommendations = useCallback(async () => {
-    const events: CalendarEvent[] = dayOrder.map((day, index) => ({
+  const eventsForApi = useCallback((): CalendarEvent[] => {
+    return dayOrder.map((day, index) => ({
       id: 'event-' + index,
       day,
       eventType: eventsByDay[day],
     }));
+  }, [eventsByDay]);
+
+  const mergeRecommendationsIntoSets = useCallback(
+    (
+      nextRecommendations: DayRecommendation[],
+      sourceType: 'original' | 'regenerated',
+      append: boolean
+    ): DayRecommendationSet[] => {
+      const byDay = new Map<DayOfWeek, DayRecommendation>();
+      nextRecommendations.forEach((rec) => byDay.set(rec.day, rec));
+
+      return dayOrder
+        .filter((day) => byDay.has(day))
+        .map((day) => {
+          const recommendation = byDay.get(day)!;
+          const existing = recommendationSets.find((set) => set.day === day);
+          const existingVariants = append ? (existing?.variants ?? []) : [];
+          const previousSelected =
+            existing?.variants.find((v) => v.id === existing.selectedVariantId) ?? null;
+          const nextVariant = buildVariant(
+            recommendation,
+            existingVariants.length,
+            sourceType,
+            append ? previousSelected ?? undefined : undefined
+          );
+          const variants = existingVariants.concat(nextVariant);
+          return {
+            day,
+            variants: variants.map((variant, idx) => ({
+              ...variant,
+              label: createVariantLabel(idx),
+            })),
+            selectedVariantId: existing?.selectedVariantId ?? nextVariant.id,
+          };
+        });
+    },
+    [recommendationSets]
+  );
+
+  const emitSelectedRecommendations = useCallback((sets: DayRecommendationSet[]) => {
+    const selected = sets
+      .map((set) => set.variants.find((v) => v.id === set.selectedVariantId) ?? set.variants[0])
+      .filter(Boolean)
+      .map((variant) => variant!.recommendation)
+      .sort((a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day));
+    setRecommendations(selected);
+  }, []);
+
+  const buildPinConstraints = useCallback((sets: DayRecommendationSet[]): RecommendationPinConstraint[] => {
+    return sets
+      .map((set) => {
+        const selected = set.variants.find((v) => v.id === set.selectedVariantId) ?? set.variants[0];
+        if (!selected) return null;
+        const pins = selected.pinnedPieces;
+        if (!selected.pinWholeOutfit && !pins.top && !pins.bottom && !pins.dress) {
+          return null;
+        }
+        return {
+          day: set.day,
+          pinWholeOutfit: selected.pinWholeOutfit,
+          topId: selected.pinWholeOutfit || pins.top ? selected.recommendation.outfit.topId : undefined,
+          bottomId:
+            selected.pinWholeOutfit || pins.bottom ? selected.recommendation.outfit.bottomId : undefined,
+          dressId: selected.pinWholeOutfit || pins.dress ? selected.recommendation.outfit.dressId : undefined,
+        } satisfies RecommendationPinConstraint;
+      })
+      .filter((value): value is RecommendationPinConstraint => Boolean(value));
+  }, []);
+
+  const generateRecommendations = useCallback(async () => {
+    const events = eventsForApi();
     await saveWeekEvents(userId, events);
     const response = await getWeeklyRecommendations(userId, events, userGender);
-    setRecommendations(
-      response.recommendations.sort(
-        (a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day)
-      )
+    const sorted = response.recommendations.sort(
+      (a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day)
     );
-  }, [userId, eventsByDay, userGender]);
+    const sets = mergeRecommendationsIntoSets(sorted, 'original', false);
+    setRecommendationSets(sets);
+    emitSelectedRecommendations(sets);
+  }, [userId, eventsForApi, userGender, mergeRecommendationsIntoSets, emitSelectedRecommendations]);
+
+  const regenerateRecommendationsWithPins = useCallback(async () => {
+    const events = eventsForApi();
+    await saveWeekEvents(userId, events);
+    const pinConstraints = buildPinConstraints(recommendationSets);
+    const response = await getWeeklyRecommendations(userId, events, userGender, pinConstraints);
+    const sorted = response.recommendations.sort(
+      (a, b) => dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day)
+    );
+    const sets = mergeRecommendationsIntoSets(sorted, 'regenerated', true);
+    setRecommendationSets(sets);
+    emitSelectedRecommendations(sets);
+  }, [
+    userId,
+    eventsForApi,
+    userGender,
+    recommendationSets,
+    buildPinConstraints,
+    mergeRecommendationsIntoSets,
+    emitSelectedRecommendations,
+  ]);
+
+  const setSelectedRecommendationVariant = useCallback(
+    async (day: DayOfWeek, variantId: string): Promise<void> => {
+      let analyticsPayload: RecommendationChoicePayload | null = null;
+      setRecommendationSets((current) => {
+        const next = current.map((set) => {
+          if (set.day !== day) return set;
+          const selected = set.variants.find((variant) => variant.id === variantId);
+          if (selected) {
+            analyticsPayload = {
+              userId,
+              day,
+              chosenVariantId: selected.id,
+              sourceType: selected.sourceType,
+              pinWholeOutfit: selected.pinWholeOutfit,
+              pinnedPieceKeys: Object.entries(selected.pinnedPieces)
+                .filter(([, pinned]) => pinned)
+                .map(([piece]) => piece),
+            };
+          }
+          return { ...set, selectedVariantId: variantId };
+        });
+        emitSelectedRecommendations(next);
+        return next;
+      });
+      if (analyticsPayload) {
+        await trackRecommendationChoice(analyticsPayload);
+      }
+    },
+    [userId, emitSelectedRecommendations]
+  );
+
+  const setPinWholeOutfit = useCallback((day: DayOfWeek, variantId: string, pinned: boolean) => {
+    setRecommendationSets((current) =>
+      current.map((set) => {
+        if (set.day !== day) return set;
+        return {
+          ...set,
+          variants: set.variants.map((variant) => {
+            if (variant.id !== variantId) return variant;
+            return {
+              ...variant,
+              pinWholeOutfit: pinned,
+              pinnedPieces: pinned
+                ? { top: true, bottom: true, dress: true }
+                : variant.pinnedPieces,
+            };
+          }),
+        };
+      })
+    );
+  }, []);
+
+  const setPinPiece = useCallback(
+    (
+      day: DayOfWeek,
+      variantId: string,
+      piece: keyof RecommendationPinnedPieces,
+      pinned: boolean
+    ) => {
+      setRecommendationSets((current) =>
+        current.map((set) => {
+          if (set.day !== day) return set;
+          return {
+            ...set,
+            variants: set.variants.map((variant) => {
+              if (variant.id !== variantId) return variant;
+              return {
+                ...variant,
+                pinnedPieces: {
+                  ...variant.pinnedPieces,
+                  [piece]: pinned,
+                },
+              };
+            }),
+          };
+        })
+      );
+    },
+    []
+  );
 
   const addGarmentToWardrobe = useCallback(async (payload: {
     name: string;
@@ -403,6 +618,7 @@ export function AppStateProvider({
       eventsByDay,
       summariesByDay,
       recommendations,
+      recommendationSets,
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
@@ -413,6 +629,10 @@ export function AppStateProvider({
       useDemoWeek,
       syncCalendarEvents,
       generateRecommendations,
+      regenerateRecommendationsWithPins,
+      setSelectedRecommendationVariant,
+      setPinWholeOutfit,
+      setPinPiece,
       addGarmentToWardrobe,
       addGarmentViaVision,
       previewVisionItems,
@@ -428,6 +648,7 @@ export function AppStateProvider({
       eventsByDay,
       summariesByDay,
       recommendations,
+      recommendationSets,
       isCalendarConnected,
       isLoadingWardrobe,
       wardrobeError,
@@ -438,6 +659,10 @@ export function AppStateProvider({
       useDemoWeek,
       syncCalendarEvents,
       generateRecommendations,
+      regenerateRecommendationsWithPins,
+      setSelectedRecommendationVariant,
+      setPinWholeOutfit,
+      setPinPiece,
       addGarmentToWardrobe,
       addGarmentViaVision,
       previewVisionItems,

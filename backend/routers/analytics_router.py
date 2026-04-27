@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import Response
 
 from ..analytics_metrics import build_analytics_summary
-from ..db import register_signup_user_id
+from ..db import register_signup_user_id, track_recommendation_choice
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -59,6 +59,15 @@ class RegisterSignupBody(BaseModel):
     user_id: str = Field(..., max_length=512, description="Same stable id the app uses for wardrobe API calls.")
 
 
+class RecommendationChoiceBody(BaseModel):
+    user_id: str = Field(..., max_length=512)
+    day: str = Field(..., max_length=32)
+    chosen_variant_id: str = Field(..., max_length=128)
+    source_type: str = Field(..., max_length=32)
+    pin_whole_outfit: bool = False
+    pinned_piece_keys: list[str] = []
+
+
 @router.post("/register", status_code=204)
 def register_signup(body: RegisterSignupBody) -> Response:
     """
@@ -68,6 +77,20 @@ def register_signup(body: RegisterSignupBody) -> Response:
     Not protected by ``X-Analytics-Key`` (the app must call this anonymously).
     """
     register_signup_user_id(body.user_id)
+    return Response(status_code=204)
+
+
+@router.post("/recommendation-choice", status_code=204)
+def register_recommendation_choice(body: RecommendationChoiceBody) -> Response:
+    """Record which recommendation option the user chose."""
+    track_recommendation_choice(
+        user_id=body.user_id,
+        day=body.day,
+        chosen_variant_id=body.chosen_variant_id,
+        source_type=body.source_type,
+        pin_whole_outfit=body.pin_whole_outfit,
+        pinned_piece_keys=body.pinned_piece_keys,
+    )
     return Response(status_code=204)
 
 

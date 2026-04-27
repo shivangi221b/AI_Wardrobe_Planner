@@ -14,7 +14,14 @@ from __future__ import annotations
 from typing import Optional
 
 from .llm import generate_outfit_explanation
-from .models import BodyMeasurements, DayOutfitSuggestion, GarmentItem, UserProfile, WeekEvent
+from .models import (
+    BodyMeasurements,
+    DayOutfitSuggestion,
+    GarmentItem,
+    PinnedRecommendationConstraint,
+    UserProfile,
+    WeekEvent,
+)
 
 # ---------------------------------------------------------------------------
 # Category sets — checked against both category.value and sub_category
@@ -437,6 +444,7 @@ async def generate_week_recommendations(
     user_gender: Optional[str] = None,
     measurements: Optional[BodyMeasurements] = None,
     user_profile: Optional[UserProfile] = None,
+    pin_constraints: Optional[list[PinnedRecommendationConstraint]] = None,
 ) -> list[DayOutfitSuggestion]:
     """
     Generate one :class:`DayOutfitSuggestion` per event in *events*.
@@ -483,29 +491,52 @@ async def generate_week_recommendations(
         user_size_label = _derive_size_label(measurements)
 
     used_ids: set[str] = set()
+    wardrobe_by_id = {g.id: g for g in wardrobe if getattr(g, "id", None)}
+    pin_by_day = {
+        c.day.strip().lower(): c
+        for c in (pin_constraints or [])
+        if getattr(c, "day", None)
+    }
     recommendations: list[DayOutfitSuggestion] = []
 
     for event in events:
+        day_key = (event.day or "").strip().lower()
+        pin = pin_by_day.get(day_key)
         formality_chain = _FORMALITY_FALLBACK_CHAINS.get(
             event.event_type, _FALLBACK_FORMALITY_CHAIN
         )
 
-        top = _pick_garment(
-            wardrobe, _is_top, formality_chain, used_ids,
-            event_type=event.event_type,
-            user_size_label=user_size_label,
-            user_profile=user_profile,
-        )
-        bottom = _pick_garment(
-            wardrobe, _is_bottom, formality_chain, used_ids,
-            event_type=event.event_type,
-            user_size_label=user_size_label,
-            user_profile=user_profile,
-        )
+        pinned_top = wardrobe_by_id.get(pin.top_id) if pin and pin.top_id else None
+        pinned_bottom = wardrobe_by_id.get(pin.bottom_id) if pin and pin.bottom_id else None
+        pinned_dress = wardrobe_by_id.get(pin.dress_id) if pin and pin.dress_id else None
+
+        if pin and pin.pin_whole_outfit:
+            # Whole-outfit pin takes priority: keep selected pieces fixed.
+            if pinned_dress is not None:
+                top = None
+                bottom = None
+                dress = pinned_dress
+            else:
+                top = pinned_top
+                bottom = pinned_bottom
+                dress = None
+        else:
+            top = pinned_top or _pick_garment(
+                wardrobe, _is_top, formality_chain, used_ids,
+                event_type=event.event_type,
+                user_size_label=user_size_label,
+                user_profile=user_profile,
+            )
+            bottom = pinned_bottom or _pick_garment(
+                wardrobe, _is_bottom, formality_chain, used_ids,
+                event_type=event.event_type,
+                user_size_label=user_size_label,
+                user_profile=user_profile,
+            )
+            dress = pinned_dress
 
         # If top or bottom is missing, try a dress as a fallback
-        dress = None
-        if top is None or bottom is None:
+        if dress is None and (top is None or bottom is None):
             dress = _pick_garment(
                 wardrobe, _is_dress, formality_chain, used_ids,
                 event_type=event.event_type,
