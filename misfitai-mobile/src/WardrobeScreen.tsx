@@ -16,7 +16,7 @@ import {
   View,
 } from 'react-native';
 import { useAppState } from './AppStateContext';
-import { getApiErrorMessage, isApiError, type VisionPreviewItem } from './api';
+import { addGarmentsBulk, getApiErrorMessage, isApiError, type VisionPreviewItem } from './api';
 import { ReceiptIngestCard, type ConfirmedReceiptItem } from './ReceiptIngestCard';
 import { getImageForGarment, shoesImage } from './stockImages';
 import { SearchableSelect } from './SearchableSelect';
@@ -349,9 +349,11 @@ export function WardrobeScreen({
   };
 
   const handleReceiptAdd = async (items: ConfirmedReceiptItem[]): Promise<void> => {
-    for (const item of items) {
-      try {
-        await addGarmentToWardrobe({
+    if (!items.length) return;
+    try {
+      await addGarmentsBulk(
+        userId,
+        items.map((item) => ({
           name: item.name,
           category: item.category,
           color: item.color,
@@ -359,12 +361,10 @@ export function WardrobeScreen({
           brand: item.brand,
           size: item.size,
           price: item.price,
-        });
-      } catch (error) {
-        throw new Error(
-          getApiErrorMessage(error, `Could not add "${item.name}" from receipt.`)
-        );
-      }
+        }))
+      );
+    } catch (error) {
+      throw new Error(getApiErrorMessage(error, 'Could not add items from receipt.'));
     }
     showWardrobeSaved(
       `${items.length} item${items.length === 1 ? '' : 's'} added from receipt!`

@@ -6,7 +6,6 @@ import { AppStateProvider, useAppState } from './src/AppStateContext';
 import { WardrobeScreen } from './src/WardrobeScreen';
 import { EventsScreen } from './src/EventsScreen';
 import { WeeklyPlanScreen } from './src/WeeklyPlanScreen';
-import { ProfileScreen } from './src/ProfileScreen';
 import { generateAvatar, registerSignupWithBackend, updateUserProfile, USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
@@ -38,8 +37,9 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 const SESSION_STORAGE_KEY = '@misfitai/session';
+const FORCE_ONBOARDING = process.env.EXPO_PUBLIC_FORCE_ONBOARDING === 'true';
 
-type Tab = 'wardrobe' | 'events' | 'plan' | 'profile';
+type Tab = 'wardrobe' | 'events' | 'plan';
 
 type Session = {
   provider: AuthProvider;
@@ -327,10 +327,11 @@ function AppInner() {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
 
+  // Signup users should stay in the onboarding wizard until it's explicitly completed.
+  // `profileCompleted` can be true for legacy sessions and should not skip onboarding.
   const needsOnboarding =
     session.mode === 'signup' &&
-    !session.onboardingCompleted &&
-    !session.profileCompleted;
+    (!session.onboardingCompleted || FORCE_ONBOARDING);
 
   if (needsOnboarding) {
     return (

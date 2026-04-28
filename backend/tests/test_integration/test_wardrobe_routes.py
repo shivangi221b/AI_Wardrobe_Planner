@@ -149,3 +149,101 @@ class TestReceiptParser:
             json={"source": "text", "content": "   "},
         )
         assert resp.status_code == 400
+
+
+@pytest.mark.usefixtures("_isolate_env")
+class TestBulkAddWardrobe:
+    async def test_creates_multiple_items(self, client):
+        resp = await client.post(
+            "/wardrobe/bulk-user/items/bulk",
+            json={
+                "items": [
+                    {
+                        "name": "White tee",
+                        "category": "top",
+                        "color": "white",
+                        "primary_image_url": "https://example.com/tee.jpg",
+                    },
+                    {
+                        "name": "Black jeans",
+                        "category": "bottom",
+                        "color": "black",
+                        "primary_image_url": "https://example.com/jeans.jpg",
+                        "brand": "Levi's",
+                        "size": "32",
+                        "price": 79.99,
+                    },
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+        names = {item["sub_category"] for item in data}
+        assert names == {"White tee", "Black jeans"}
+        assert all(item["user_id"] == "bulk-user" for item in data)
+
+    async def test_empty_items_returns_empty_list(self, client):
+        resp = await client.post(
+            "/wardrobe/bulk-user/items/bulk",
+            json={"items": []},
+        )
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    async def test_invalid_category_rejected(self, client):
+        resp = await client.post(
+            "/wardrobe/bulk-user/items/bulk",
+            json={
+                "items": [
+                    {
+                        "name": "Spaceship",
+                        "category": "vehicle",
+                        "primary_image_url": "https://example.com/img.jpg",
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 422
+
+
+@pytest.mark.usefixtures("_isolate_env")
+class TestStylePreferences:
+    async def test_saves_preferences_returns_204(self, client):
+        resp = await client.post(
+            "/users/style-user/style-preferences",
+            json={
+                "aesthetics": ["minimalist", "streetwear"],
+                "brands": ["Nike", "Uniqlo"],
+                "color_tones": ["neutral", "earth"],
+            },
+        )
+        assert resp.status_code == 204
+        assert resp.content == b""
+
+    async def test_empty_preferences_accepted(self, client):
+        resp = await client.post(
+            "/users/style-user/style-preferences",
+            json={},
+        )
+        assert resp.status_code == 204
+
+    async def test_db_function_is_invoked(self, client, monkeypatch):
+        calls: list[dict] = []
+
+        def _mock_save(user_id, aesthetics, brands, color_tones):
+            calls.append(
+                {"user_id": user_id, "aesthetics": aesthetics, "brands": brands}
+            )
+
+        monkeypatch.setattr("backend.main.save_style_preferences", _mock_save)
+        resp = await client.post(
+            "/users/style-user/style-preferences",
+            json={"aesthetics": ["casual"], "brands": ["Gap"], "color_tones": []},
+        )
+        assert resp.status_code == 204
+        assert len(calls) == 1
+        assert calls[0]["user_id"] == "style-user"
+        assert "casual" in calls[0]["aesthetics"]
+        assert "Gap" in calls[0]["brands"]

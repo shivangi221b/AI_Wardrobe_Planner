@@ -1,10 +1,15 @@
 """
-routers/avatar_router.py — Avatar portrait generation endpoint.
+routers/avatar_router.py — Avatar portrait generation + outfit-preview endpoints.
 
 POST /users/{user_id}/avatar/generate
     Accepts a selfie image (multipart/form-data), generates a stylised 2-D
     portrait using Gemini Vision + Imagen/FLUX, stores the result, and
     updates the user's avatar_config.avatar_image_url.
+
+POST /users/{user_id}/outfit-preview/generate
+    Uses Gemini multimodal image generation to produce an image of the user's
+    avatar *wearing* the recommended outfit.  Falls back to PIL compositing
+    if Gemini is unavailable.
 """
 
 from __future__ import annotations
@@ -17,8 +22,16 @@ from pydantic import BaseModel
 from PIL import Image
 
 from ..avatar_gen import generate_avatar_image
-from ..db import get_user_profile, store_avatar_image, upsert_user_profile
+from ..llm import _is_safe_image_url
+from ..db import (
+    get_outfit_preview_url,
+    get_user_profile,
+    store_avatar_image,
+    store_outfit_preview_image,
+    upsert_user_profile,
+)
 from ..models import AvatarConfig
+from ..outfit_on_avatar import generate_outfit_on_avatar
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +55,28 @@ _PIL_FORMAT_TO_MIME: dict[str, str] = {
 
 class AvatarGenerateResponse(BaseModel):
     avatar_image_url: str
+
+
+class GarmentImageItem(BaseModel):
+    url: str
+    """Public URL of the garment's photo (``primaryImageUrl``)."""
+    name: str
+    """Garment display name."""
+    category: str
+    """Garment category: top | bottom | dress | outerwear | shoes | accessory."""
+
+
+class OutfitPreviewRequest(BaseModel):
+    outfit_id: str
+    """Stable ID used as the cache key — typically ``DayRecommendation.outfit.id``."""
+    avatar_image_url: str
+    """Public URL of the user's stored avatar portrait."""
+    garment_images: list[GarmentImageItem]
+    """Ordered list of garment images to include (outerwear → top → bottom → shoes → accessory)."""
+
+
+class OutfitPreviewResponse(BaseModel):
+    preview_image_url: str
 
 
 def _trusted_mime_from_image_bytes(data: bytes) -> str:
@@ -146,3 +181,81 @@ async def generate_avatar(
 
     logger.info("avatar_router: avatar saved url=%s", avatar_url)
     return AvatarGenerateResponse(avatar_image_url=avatar_url)
+
+
+@router.post("/{user_id}/outfit-preview/generate", response_model=OutfitPreviewResponse)
+async def generate_outfit_preview(
+    user_id: str,
+    body: OutfitPreviewRequest,
+) -> OutfitPreviewResponse:
+    """
+    Generate (or return a cached) outfit preview showing the user's avatar
+    **wearing** the recommended outfit items.
+
+    **Flow**
+
+    1. Check whether a preview for this ``(user_id, outfit_id)`` pair is already
+       stored — return it immediately if so (no network call).
+    2. Call ``generate_outfit_on_avatar``:
+       - Downloads the avatar portrait and garment photos.
+       - Sends them to Gemini multimodal image generation with a prompt asking
+         it to redraw the same character dressed in those specific clothes.
+       - Falls back to PIL side-by-side compositing if Gemini is unavailable.
+    3. Store the JPEG and return the URL.
+    """
+    if not body.outfit_id.strip():
+        raise HTTPException(status_code=422, detail="outfit_id must not be empty.")
+    if not body.avatar_image_url.strip():
+        raise HTTPException(status_code=422, detail="avatar_image_url must not be empty.")
+    if not _is_safe_image_url(body.avatar_image_url):
+        raise HTTPException(status_code=422, detail="avatar_image_url is not a valid or permitted URL.")
+
+    # Return the cached composite if it already exists.
+    cached_url = get_outfit_preview_url(user_id, body.outfit_id)
+    if cached_url:
+        logger.info(
+            "avatar_router: outfit preview cache hit user_id=%s outfit_id=%s",
+            user_id,
+            body.outfit_id,
+        )
+        return OutfitPreviewResponse(preview_image_url=cached_url)
+
+    logger.info(
+        "avatar_router: generating outfit-on-avatar preview user_id=%s outfit_id=%s garments=%d",
+        user_id,
+        body.outfit_id,
+        len(body.garment_images),
+    )
+
+    garment_dicts = [
+        {"url": g.url, "name": g.name, "category": g.category}
+        for g in body.garment_images
+        if g.url.strip() and _is_safe_image_url(g.url)
+    ]
+
+    if not garment_dicts:
+        raise HTTPException(
+            status_code=422,
+            detail="No valid garment image URLs were provided. Ensure garment photos have public URLs.",
+        )
+
+    try:
+        jpeg_bytes = await generate_outfit_on_avatar(
+            avatar_url=body.avatar_image_url,
+            garment_items=garment_dicts,
+        )
+    except Exception:
+        logger.exception("outfit_on_avatar failed for user_id=%s", user_id)
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to generate outfit preview.",
+        ) from None
+
+    try:
+        preview_url = store_outfit_preview_image(user_id, body.outfit_id, jpeg_bytes)
+    except Exception:
+        logger.exception("outfit preview storage failed user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail="Failed to store the generated outfit preview.") from None
+
+    logger.info("avatar_router: outfit preview saved url=%s", preview_url)
+    return OutfitPreviewResponse(preview_image_url=preview_url)
