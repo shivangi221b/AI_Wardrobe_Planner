@@ -189,6 +189,33 @@ export function EventsScreen({
           </Pressable>
         </View>
 
+        <View style={styles.actionsRow}>
+          <Pressable
+            onPress={handleConnect}
+            disabled={connecting}
+            style={[styles.connectButton, isCalendarConnected && styles.connectButtonActive]}
+          >
+            <Text style={[styles.connectButtonText, isCalendarConnected && styles.connectButtonTextActive]}>
+              {connecting
+                ? isCalendarConnected
+                  ? 'Updating...'
+                  : 'Connecting...'
+                : isCalendarConnected
+                ? 'Update calendar'
+                : 'Connect calendar'}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={styles.demoWeekButton}
+            onPress={() => {
+              setError(null);
+              useDemoWeek();
+            }}
+          >
+            <Text style={styles.demoWeekText}>Use demo week</Text>
+          </Pressable>
+        </View>
+
         {isCalendarConnected ? (
           <Text style={styles.helperText}>Calendar connected. Tap Update calendar anytime to refresh events.</Text>
         ) : null}
@@ -286,17 +313,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: palette.muted,
     fontFamily: type.body,
-  },
-  calendarExplainer: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: palette.muted,
-    fontFamily: type.body,
-    marginTop: 6,
-  },
-  calendarExplainerEm: {
-    fontFamily: type.bodyDemi,
-    color: palette.inkSoft,
   },
   actionsRow: {
     marginTop: 2,

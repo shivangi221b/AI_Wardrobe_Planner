@@ -130,6 +130,109 @@ def _build_prompt() -> str:
     )
 
 
+def _build_receipt_prompt() -> str:
+    return (
+        "You are a receipt parser for a wardrobe app.\n"
+        "Given a retail receipt screenshot/photo, extract ONLY clothing/accessory line items.\n"
+        "Return strict JSON only with this exact shape:\n"
+        "{\n"
+        '  "items": [\n'
+        "    {\n"
+        '      "name": "item name",\n'
+        '      "brand": "brand or null",\n'
+        '      "size": "size or null",\n'
+        '      "color": "color or null",\n'
+        '      "category": "top|bottom|dress|outerwear|shoes|accessory",\n'
+        '      "price": 0.0,\n'
+        '      "confidence": 0.0\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "Rules:\n"
+        "- Exclude subtotal, total, tax, shipping, discounts, and payment lines.\n"
+        "- Include only apparel, shoes, and accessories.\n"
+        "- Use null for unknown fields.\n"
+        "- confidence must be between 0 and 1.\n"
+        "- Output JSON only, no markdown."
+    )
+
+
+def extract_receipt_items_from_image(
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+) -> List[dict[str, Any]]:
+    """
+    Parse a receipt image using the same Gemini vision client/model as garment extraction.
+
+    This intentionally does not generate any product images; it only extracts structured
+    line-item metadata that can be reviewed before adding garments to wardrobe.
+    """
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except UnidentifiedImageError as exc:
+        is_heic = str(mime_type or "").lower() in ("image/heic", "image/heif")
+        if is_heic and not _heic_enabled:
+            raise RuntimeError(
+                "HEIC images aren't supported in this backend yet. "
+                "Install pillow-heif and restart the server, or upload JPG/PNG."
+            ) from exc
+        raise RuntimeError(
+            "Unsupported image format. Please upload a JPG/PNG (HEIC supported if pillow-heif is installed)."
+        ) from exc
+
+    width, height = image.size
+    logger.info(
+        "ReceiptVision start mime=%s size=%dx%d bytes=%d",
+        mime_type,
+        width,
+        height,
+        len(image_bytes),
+    )
+
+    parsed: dict[str, Any] = {"items": []}
+    try:
+        client = _gemini_client()
+        response = client.models.generate_content(
+            model=_gemini_model_name(),
+            contents=[
+                types.Part.from_text(text=_build_receipt_prompt()),
+                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            ],
+        )
+        parsed = _safe_json_parse(response.text or '{"items": []}')
+    except Exception as exc:
+        logger.exception("ReceiptVision extraction failed")
+        raise RuntimeError(
+            "Receipt vision parsing failed via Vertex AI. "
+            "Check GOOGLE_CLOUD_PROJECT/LOCATION, service-account IAM, and Vertex AI API enablement."
+        ) from exc
+
+    items = parsed.get("items") if isinstance(parsed, dict) else []
+    if not isinstance(items, list):
+        return []
+
+    out: List[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        out.append(
+            {
+                "name": name,
+                "brand": item.get("brand"),
+                "size": item.get("size"),
+                "color": item.get("color"),
+                "category": item.get("category"),
+                "price": item.get("price"),
+                "confidence": item.get("confidence"),
+            }
+        )
+    logger.info("ReceiptVision complete items=%d", len(out))
+    return out
+
+
 def extract_garments_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> List[ExtractedGarmentAsset]:
     try:
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")

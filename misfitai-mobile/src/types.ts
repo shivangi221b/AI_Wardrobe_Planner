@@ -24,6 +24,8 @@ export interface Garment {
   pattern?: string | null;
   material?: string | null;
   fitNotes?: string | null;
+  brand?: string | null;
+  size?: string | null;
   gender?: GarmentGender | null;
   timesRecommended?: number;
   hiddenFromRecommendations?: boolean;
@@ -132,4 +134,10 @@ export interface UserProfileUpdate {
   topSize?: string | null;
   bottomSize?: string | null;
   avatarConfig?: AvatarConfig | null;
+}
+
+export interface StylePreferences {
+  aesthetics: string[];
+  brands: string[];
+  colorTones: string[];
 }

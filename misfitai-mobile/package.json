@@ -15,6 +15,7 @@
     "expo": "~55.0.15",
     "expo-apple-authentication": "~55.0.13",
     "expo-auth-session": "~55.0.14",
+    "expo-document-picker": "~55.0.13",
     "expo-image": "~55.0.9",
     "expo-image-picker": "~55.0.18",
     "expo-status-bar": "~55.0.5",

@@ -6,11 +6,10 @@ import { AppStateProvider, useAppState } from './src/AppStateContext';
 import { WardrobeScreen } from './src/WardrobeScreen';
 import { EventsScreen } from './src/EventsScreen';
 import { WeeklyPlanScreen } from './src/WeeklyPlanScreen';
-import { ProfileScreen } from './src/ProfileScreen';
 import { generateAvatar, registerSignupWithBackend, updateUserProfile, USE_MOCK_API } from './src/api';
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
-import { ProfileSetupScreen, type ProfileSetupResult } from './src/ProfileSetupScreen';
+import { OnboardingFlow } from './src/OnboardingFlow';
 import { palette, radius, type } from './src/theme';
 import { initAnalytics, trackAuthSuccess } from './src/analytics';
 
@@ -38,8 +37,9 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 const SESSION_STORAGE_KEY = '@misfitai/session';
+const FORCE_ONBOARDING = process.env.EXPO_PUBLIC_FORCE_ONBOARDING === 'true';
 
-type Tab = 'wardrobe' | 'events' | 'plan' | 'profile';
+type Tab = 'wardrobe' | 'events' | 'plan';
 
 type Session = {
   provider: AuthProvider;
@@ -47,8 +47,10 @@ type Session = {
   profile?: UserProfile;
   /** Stable user id derived at auth-time, used for all API calls. */
   userId: string;
-  /** If true, optional profile questions were completed (or intentionally skipped). */
+  /** Legacy flag: profile questions completed pre-onboarding-flow. */
   profileCompleted?: boolean;
+  /** True once the full onboarding wizard (style + starter wardrobe) is done. */
+  onboardingCompleted?: boolean;
 };
 
 const DEMO_WEEK_EVENTS = {
@@ -71,47 +73,6 @@ function deriveUserIdFromProfile(profile?: UserProfile): string {
   return `demo-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function ProfileSetupScreenWithMeasurements({
-  session,
-  setSession,
-}: {
-  session: Session;
-  setSession: React.Dispatch<React.SetStateAction<Session | null>>;
-}) {
-  const { updateMeasurements } = useAppState();
-  return (
-    <ProfileSetupScreen
-      initialProfile={session.profile}
-      onDone={(result: ProfileSetupResult) => {
-        const { profilePatch, measurements, profileUpdate, selfieUri } = result;
-        const next: Session = {
-          ...session,
-          profile: { ...(session.profile ?? {}), ...profilePatch },
-          profileCompleted: true,
-        };
-        setSession(next);
-        AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
-        const hasMeasurements = Object.values(measurements).some((v) => v != null);
-        if (hasMeasurements) {
-          updateMeasurements(measurements).catch(() => {
-            /* non-blocking */
-          });
-        }
-        // Save extended profile data (color preferences, sizes, avatar) non-blocking.
-        // If a selfie was provided, chain avatar generation after the profile is saved.
-        updateUserProfile(next.userId, profileUpdate)
-          .then(() => {
-            if (selfieUri) {
-              return generateAvatar(next.userId, selfieUri);
-            }
-          })
-          .catch(() => {
-            /* non-blocking — avatar generation failure should not block onboarding */
-          });
-      }}
-    />
-  );
-}
 
 function AppContent({
   session,
@@ -146,10 +107,6 @@ function AppContent({
 
   const handleTabChange = (nextTab: Tab) => {
     setTab(nextTab);
-    if (nextTab === 'profile') {
-      setTabHint(null);
-      return;
-    }
     if (nextTab === 'events' && !wardrobeStepComplete) {
       setTabHint('Wardrobe is complete after at least one top and one bottom.');
       return;
@@ -170,7 +127,7 @@ function AppContent({
       <StatusBar style="dark" />
       <AtmosphereBackground />
 
-      <View style={[styles.topChrome, tab === 'profile' && styles.topChromeCompact]}>
+      <View style={styles.topChrome}>
         <View style={styles.metaBar}>
           <View style={styles.metaChip}>
             <Text style={styles.metaChipText}>
@@ -184,7 +141,7 @@ function AppContent({
           </Pressable>
         </View>
 
-        {tab !== 'profile' ? <View style={styles.stepperCard}>
+        <View style={styles.stepperCard}>
           {flowSteps.map((item, index) => {
             const active = tab === item.key;
             return (
@@ -213,9 +170,9 @@ function AppContent({
               </React.Fragment>
             );
           })}
-        </View> : null}
+        </View>
 
-        {tab !== 'profile' ? <View style={styles.breadcrumbRow}>
+        <View style={styles.breadcrumbRow}>
           {flowSteps.map((item, index) => {
             const active = tab === item.key;
             return (
@@ -235,9 +192,9 @@ function AppContent({
               </React.Fragment>
             );
           })}
-        </View> : null}
+        </View>
 
-        {tab !== 'profile' && tabHint ? <Text style={styles.stepHint}>{tabHint}</Text> : null}
+        {tabHint ? <Text style={styles.stepHint}>{tabHint}</Text> : null}
       </View>
 
       <View style={styles.content}>
@@ -271,13 +228,6 @@ function AppContent({
             onNavigateToWardrobe={() => handleTabChange('wardrobe')}
           />
         ) : null}
-
-        {tab === 'profile' ? (
-          <ProfileScreen
-            userId={session.userId}
-            displayName={session.profile?.displayName}
-          />
-        ) : null}
       </View>
 
       <View style={styles.navBar}>
@@ -285,7 +235,6 @@ function AppContent({
           { key: 'wardrobe', label: 'Wardrobe' },
           { key: 'events', label: 'Calendar' },
           { key: 'plan', label: 'Outfits' },
-          { key: 'profile', label: 'Profile' },
         ] as const).map((item) => {
           const active = tab === item.key;
           return (
@@ -378,17 +327,20 @@ function AppInner() {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
 
-  if (session.mode === 'signup' && session.profileCompleted !== true) {
+  // Signup users should stay in the onboarding wizard until it's explicitly completed.
+  // `profileCompleted` can be true for legacy sessions and should not skip onboarding.
+  const needsOnboarding =
+    session.mode === 'signup' &&
+    (!session.onboardingCompleted || FORCE_ONBOARDING);
+
+  if (needsOnboarding) {
     return (
       <AppStateProvider
         userId={session.userId}
         userGender={session.profile?.gender ?? null}
         googleAccessToken={null}
       >
-        <ProfileSetupScreenWithMeasurements
-          session={session}
-          setSession={setSession}
-        />
+        <OnboardingFlow session={session} setSession={setSession} />
       </AppStateProvider>
     );
   }
@@ -421,9 +373,6 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 14,
     gap: 8,
-  },
-  topChromeCompact: {
-    gap: 0,
   },
   content: {
     flex: 1,

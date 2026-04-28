@@ -24,6 +24,7 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+_MISSING_COLUMN_ERROR_RE = re.compile(r"Could not find the '([^']+)' column")
 
 _BCRYPT_PASSWORD_MAX_BYTES = 72
 
@@ -481,15 +482,47 @@ def _supabase_payload(garment: GarmentItem) -> dict:
     return {k: v for k, v in raw.items() if k in _SUPABASE_GARMENT_COLUMNS}
 
 
+def _extract_missing_column_name(exc: Exception) -> Optional[str]:
+    match = _MISSING_COLUMN_ERROR_RE.search(str(exc))
+    if not match:
+        return None
+    column = match.group(1).strip()
+    return column or None
+
+
+def _insert_garment_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    attempted: set[str] = set()
+    current_payload = dict(payload)
+    while True:
+        try:
+            result = get_supabase_client().table(_table_name()).insert(current_payload).execute()
+            return (result.data or [current_payload])[0]
+        except Exception as exc:
+            missing_column = _extract_missing_column_name(exc)
+            if (
+                not missing_column
+                or missing_column in attempted
+                or missing_column not in current_payload
+            ):
+                raise
+            attempted.add(missing_column)
+            logger.warning(
+                "Garments insert: table %s missing column %s; retrying without it",
+                _table_name(),
+                missing_column,
+            )
+            current_payload.pop(missing_column, None)
+
+
 def insert_garment(garment: GarmentItem) -> GarmentItem:
     garment = _ensure_garment_tags(garment)
     if _use_local_store():
         current = _local_wardrobes.get(garment.user_id, [])
         _local_wardrobes[garment.user_id] = [garment] + current
         return garment
+
     payload = _supabase_payload(garment)
-    result = get_supabase_client().table(_table_name()).insert(payload).execute()
-    row = (result.data or [payload])[0]
+    row = _insert_garment_payload(payload)
     return _row_to_garment(row)
 
 
@@ -506,8 +539,9 @@ def set_wardrobe(user_id: str, items: List[GarmentItem]) -> None:
     client = get_supabase_client()
     client.table(_table_name()).delete().eq("user_id", user_id).execute()
     for garment in items:
+
         payload = _supabase_payload(garment)
-        client.table(_table_name()).insert(payload).execute()
+        _insert_garment_payload(payload)
 
 
 def add_garments(user_id: str, items: List[GarmentItem]) -> None:
@@ -865,6 +899,49 @@ def store_avatar_image(user_id: str, image_bytes: bytes) -> str:
         logger.exception("store_avatar_image failed user_id=%s", user_id)
         raise
 
+
+# ---------------------------------------------------------------------------
+# Style preferences
+# ---------------------------------------------------------------------------
+
+_local_style_prefs: dict[str, dict] = {}
+
+
+def _style_prefs_table_name() -> str:
+    return os.getenv("SUPABASE_STYLE_PREFS_TABLE", "user_style_preferences")
+
+
+def save_style_preferences(
+    user_id: str,
+    aesthetics: list[str],
+    brands: list[str],
+    color_tones: list[str],
+) -> None:
+    """Persist onboarding style preferences. Falls back to local store on error."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return
+    payload = {
+        "user_id": uid,
+        "aesthetics": aesthetics,
+        "brands": brands,
+        "color_tones": color_tones,
+    }
+    if _use_local_store():
+        _local_style_prefs[uid] = payload
+        return
+    try:
+        get_supabase_client().table(_style_prefs_table_name()).upsert(
+            payload, on_conflict="user_id"
+        ).execute()
+    except Exception:
+        logger.exception("save_style_preferences failed user_id=%r", uid[:80])
+        _local_style_prefs[uid] = payload
+
+
+# ---------------------------------------------------------------------------
+# Outfit preview images
+# ---------------------------------------------------------------------------
 
 _OUTFIT_PREVIEW_VERSION = "v7"   # bump when composite layout changes to bust old cached files
 
