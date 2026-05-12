@@ -111,15 +111,6 @@ function SectionHeader({ title, onEdit }: { title: string; onEdit?: () => void }
   );
 }
 
-function FieldRow({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={s.fieldRow}>
-      <Text style={s.fieldLabel}>{label}</Text>
-      <Text style={s.fieldValue}>{value || '—'}</Text>
-    </View>
-  );
-}
-
 function ChipRow<T extends string>({
   options,
   value,
@@ -658,7 +649,11 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
         {/* ---- Personal ---- */}
         <SectionHeader title="Personal" />
         <View style={s.card}>
-          {displayName ? <FieldRow label="Name" value={displayName} /> : null}
+          {displayName ? (
+            <View style={s.fieldRow}>
+              <Text style={s.fieldValue}>{displayName}</Text>
+            </View>
+          ) : null}
 
           <Text style={s.label}>Gender</Text>
           <ChipRow
@@ -917,15 +912,10 @@ const s = StyleSheet.create({
   },
   fieldRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: palette.line,
-  },
-  fieldLabel: {
-    fontSize: 13,
-    color: palette.muted,
-    fontFamily: type.body,
   },
   fieldValue: {
     fontSize: 13,
