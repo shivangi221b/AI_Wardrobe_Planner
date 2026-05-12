@@ -3,6 +3,8 @@
  * Brands: widely recognized US adult apparel / footwear names (alphabetical).
  */
 
+import type { GarmentCategory } from './types';
+
 export const SEARCH_BRANDS: string[] = [
   'Abercrombie & Fitch',
   'Adidas',
@@ -114,7 +116,7 @@ export const SEARCH_MATERIALS: string[] = [
   'Wool',
 ];
 
-export type SearchGarmentCategory = 'top' | 'bottom' | 'shoes' | 'accessory';
+export type SearchGarmentCategory = GarmentCategory;
 
 export const SEARCH_KINDS_BY_CATEGORY: Record<SearchGarmentCategory, string[]> = {
   top: [
@@ -180,5 +182,29 @@ export const SEARCH_KINDS_BY_CATEGORY: Record<SearchGarmentCategory, string[]> =
     'Tie',
     'Tote bag',
     'Watch',
+  ],
+  dress: [
+    'Midi dress',
+    'Maxi dress',
+    'Mini dress',
+    'Wrap dress',
+    'Shift dress',
+    'Shirt dress',
+    'Sundress',
+    'Cocktail dress',
+    'Slip dress',
+    'Knit dress',
+  ],
+  outerwear: [
+    'Trench coat',
+    'Peacoat',
+    'Puffer jacket',
+    'Parka',
+    'Denim jacket',
+    'Leather jacket',
+    'Blazer',
+    'Bomber jacket',
+    'Fleece jacket',
+    'Wool coat',
   ],
 };

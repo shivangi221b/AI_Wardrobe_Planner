@@ -122,8 +122,9 @@ def _is_safe_image_url(url: str) -> bool:
 _SYSTEM_PROMPT = (
     "You are a concise, friendly personal stylist. "
     "Write exactly one sentence explaining why the selected outfit suits "
-    "the occasion. Do not start the sentence with 'I' or repeat the day "
-    "or event type word-for-word."
+    "the occasion. The look may be a one-piece outfit (e.g. a dress or jumpsuit) "
+    "or separates; describe what works. Do not start the sentence with 'I' or "
+    "repeat the day or event type word-for-word."
 )
 
 _FALLBACK_TEMPLATE = (

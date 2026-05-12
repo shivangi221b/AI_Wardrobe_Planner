@@ -247,3 +247,30 @@ class TestStylePreferences:
         assert calls[0]["user_id"] == "style-user"
         assert "casual" in calls[0]["aesthetics"]
         assert "Gap" in calls[0]["brands"]
+
+
+@pytest.mark.usefixtures("_isolate_env", "_mock_upload")
+class TestStarterGarmentPreview:
+    async def test_returns_preview(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "vision.image_gen.generate_garment_image",
+            lambda prompt: b"\xff\xd8fake",
+        )
+        resp = await client.post(
+            "/wardrobe/starter-user/starter-garment-preview",
+            json={
+                "name": "White tee",
+                "category": "top",
+                "color": "white",
+                "formality": "casual",
+                "seasonality": "all_season",
+                "size": "M",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["category"] == "top"
+        assert data["sub_category"] == "White tee"
+        assert data["size"] == "M"
+        assert "image_url" in data
+        assert "starter-user" in data["image_url"]

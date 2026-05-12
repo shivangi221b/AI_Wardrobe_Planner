@@ -14,7 +14,7 @@ import { Image as ExpoImage } from 'expo-image';
 import { useAppState } from './AppStateContext';
 import { dayLabels, dayOrder, eventTypeLabels } from './constants';
 import { getImageForGarment } from './stockImages';
-import type { DayOfWeek, GarmentCategory } from './types';
+import type { DayOfWeek, Garment, GarmentCategory } from './types';
 import { palette, radius, type } from './theme';
 import { OutfitAvatarPreview, type CollagePiece } from './OutfitAvatarPreview';
 import { OutfitDetailModal } from './OutfitDetailModal';
@@ -52,6 +52,90 @@ function outfitSummaryLabel(rec: { outfit: { topName: string; bottomName: string
     parts.push(rec.outfit.bottomName);
   }
   return parts.length > 0 ? parts.join(' + ') : '\u2014';
+}
+
+function garmentBlob(g: Garment): string {
+  return `${g.name} ${g.category} ${(g.tags || []).join(' ')}`.toLowerCase();
+}
+
+function topReadsAsStructuredJacket(top: Garment | undefined): boolean {
+  if (!top) return false;
+  const b = garmentBlob(top);
+  return (
+    top.category === 'outerwear' ||
+    /\b(blazer|sport coat|suit jacket|suit coat|double-breasted|peacoat)\b/i.test(b)
+  );
+}
+
+/** Extra outer layer in the collage: work or casual only — not date night, gym, or rest days. */
+function eventAllowsCollageOuterwear(eventType: string | undefined): boolean {
+  if (eventType === 'gym' || eventType === 'date_night' || eventType === 'none') return false;
+  return eventType === 'work_meeting' || eventType === 'casual';
+}
+
+function pickOuterwearForCollage(
+  garments: Garment[],
+  excludeIds: ReadonlySet<string>,
+  topImageUrl: string | undefined,
+  bottomImageUrl: string | undefined,
+  topGarment: Garment | undefined,
+  eventType: string | undefined,
+  rotationDayIndex: number
+): Garment | undefined {
+  if (!eventAllowsCollageOuterwear(eventType)) {
+    return undefined;
+  }
+  if (topReadsAsStructuredJacket(topGarment)) {
+    return undefined;
+  }
+
+  const pool = garments.filter((item) => {
+    if (item.category !== 'outerwear' || !item.id || excludeIds.has(item.id)) {
+      return false;
+    }
+    const u = item.primaryImageUrl;
+    if (u && (u === topImageUrl || u === bottomImageUrl)) {
+      return false;
+    }
+    return true;
+  });
+  if (!pool.length) return undefined;
+
+  const topB = topGarment ? garmentBlob(topGarment) : '';
+  const filtered = pool.filter((o) => {
+    const ob = garmentBlob(o);
+    if (/\b(blazer|suit jacket|sport coat)\b/i.test(topB) && /\b(blazer|suit jacket|sport coat)\b/i.test(ob)) {
+      return false;
+    }
+    return true;
+  });
+  const usePool = filtered.length ? filtered : pool;
+
+  const sorted = [...usePool].sort((a, b) => {
+    const tr = (a.timesRecommended ?? 0) - (b.timesRecommended ?? 0);
+    if (tr !== 0) return tr;
+    return a.id.localeCompare(b.id);
+  });
+  const pick = sorted[rotationDayIndex % sorted.length];
+  return pick;
+}
+
+/** Prefer shoes that are not obvious office/evening footwear when styling active days. */
+function pickShoesForCollage(
+  garments: Garment[],
+  excludeIds: ReadonlySet<string>,
+  eventType: string | undefined
+): Garment | undefined {
+  const shoes = garments.filter((item) => item.category === 'shoes' && item.id && !excludeIds.has(item.id));
+  if (!shoes.length) return undefined;
+  if (eventType === 'gym') {
+    const relaxed = shoes.find((g) => {
+      const b = garmentBlob(g);
+      return !/\b(heel|pump|stiletto|oxford|loafer|wingtip|brogue)s?\b/i.test(b);
+    });
+    return relaxed ?? shoes[0];
+  }
+  return shoes[0];
 }
 
 /** Convert a relative `/assets/…` avatar URL to a fully-qualified one for the Image component. */
@@ -194,12 +278,35 @@ export function WeeklyPlanScreen({
   const bottomGarment = selectedRecommendation
     ? garments.find((item) => item.id === selectedRecommendation.outfit.bottomId)
     : undefined;
-  const outerwearGarment = garments.find((item) => item.category === 'outerwear');
-  const shoesGarment = garments.find((item) => item.category === 'shoes');
 
   const dressName = selectedRecommendation?.outfit.dressName || dressGarment?.name || '';
   const topName = selectedRecommendation?.outfit.topName || topGarment?.name || '';
   const bottomName = selectedRecommendation?.outfit.bottomName || bottomGarment?.name || '';
+
+  const collageExcludeIds = new Set<string>();
+  if (topGarment?.id) collageExcludeIds.add(topGarment.id);
+  if (bottomGarment?.id) collageExcludeIds.add(bottomGarment.id);
+  if (dressGarment?.id) collageExcludeIds.add(dressGarment.id);
+
+  const rotationDayIndex =
+    selectedRecommendation != null ? Math.max(0, dayOrder.indexOf(selectedRecommendation.day)) : 0;
+
+  const outerwearGarment = pickOuterwearForCollage(
+    garments,
+    collageExcludeIds,
+    topGarment?.primaryImageUrl,
+    bottomGarment?.primaryImageUrl,
+    topGarment,
+    selectedRecommendation?.eventType,
+    rotationDayIndex
+  );
+  if (outerwearGarment?.id) collageExcludeIds.add(outerwearGarment.id);
+
+  const shoesGarment = pickShoesForCollage(
+    garments,
+    collageExcludeIds,
+    selectedRecommendation?.eventType
+  );
 
   const collagePieces: CollagePiece[] = [];
 
