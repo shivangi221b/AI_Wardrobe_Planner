@@ -10,6 +10,7 @@ import { generateAvatar, registerSignupWithBackend, updateUserProfile, USE_MOCK_
 import { AtmosphereBackground } from './src/AtmosphereBackground';
 import { AuthScreen, type AuthMode, type AuthProvider, type UserProfile } from './src/AuthScreen';
 import { OnboardingFlow } from './src/OnboardingFlow';
+import { ProfileScreen } from './src/ProfileScreen';
 import { palette, radius, type } from './src/theme';
 import { initAnalytics, trackAuthSuccess } from './src/analytics';
 
@@ -39,7 +40,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 const SESSION_STORAGE_KEY = '@misfitai/session';
 const FORCE_ONBOARDING = process.env.EXPO_PUBLIC_FORCE_ONBOARDING === 'true';
 
-type Tab = 'wardrobe' | 'events' | 'plan';
+type Tab = 'wardrobe' | 'events' | 'plan' | 'profile';
 
 type Session = {
   provider: AuthProvider;
@@ -103,10 +104,15 @@ function AppContent({
     { key: 'wardrobe', label: 'Wardrobe', complete: wardrobeStepComplete },
     { key: 'events', label: 'Calendar', complete: calendarStepComplete },
     { key: 'plan', label: 'Outfits', complete: outfitsStepComplete },
+    { key: 'profile', label: 'Profile', complete: true },
   ];
 
   const handleTabChange = (nextTab: Tab) => {
     setTab(nextTab);
+    if (nextTab === 'profile') {
+      setTabHint(null);
+      return;
+    }
     if (nextTab === 'events' && !wardrobeStepComplete) {
       setTabHint('Wardrobe is complete after at least one top and one bottom.');
       return;
@@ -228,6 +234,10 @@ function AppContent({
             onNavigateToWardrobe={() => handleTabChange('wardrobe')}
           />
         ) : null}
+
+        {tab === 'profile' ? (
+          <ProfileScreen userId={session.userId} displayName={session.profile?.displayName} />
+        ) : null}
       </View>
 
       <View style={styles.navBar}>
@@ -235,6 +245,7 @@ function AppContent({
           { key: 'wardrobe', label: 'Wardrobe' },
           { key: 'events', label: 'Calendar' },
           { key: 'plan', label: 'Outfits' },
+          { key: 'profile', label: 'Profile' },
         ] as const).map((item) => {
           const active = tab === item.key;
           return (

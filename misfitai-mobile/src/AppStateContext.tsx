@@ -85,6 +85,8 @@ interface AppState {
   toggleGarmentHidden: (garmentId: string, hidden: boolean) => Promise<void>;
   deleteGarmentFromWardrobe: (garmentId: string) => Promise<void>;
   updateMeasurements: (data: Omit<BodyMeasurements, 'userId' | 'updatedAt'>) => Promise<void>;
+  /** Keep global profile (e.g. avatar URL for Weekly Plan) in sync after Profile screen saves. */
+  syncUserProfile: (profile: UserProfile) => void;
 }
 
 const AppStateContext = createContext<AppState | undefined>(undefined);
@@ -418,6 +420,10 @@ export function AppStateProvider({
     [userId]
   );
 
+  const syncUserProfile = useCallback((profile: UserProfile) => {
+    setUserProfile(profile);
+  }, []);
+
   const value: AppState = useMemo(
     () => ({
       userId,
@@ -444,6 +450,7 @@ export function AppStateProvider({
       toggleGarmentHidden,
       deleteGarmentFromWardrobe,
       updateMeasurements,
+      syncUserProfile,
     }),
     [
       userId,
@@ -470,6 +477,7 @@ export function AppStateProvider({
       toggleGarmentHidden,
       deleteGarmentFromWardrobe,
       updateMeasurements,
+      syncUserProfile,
     ]
   );
 

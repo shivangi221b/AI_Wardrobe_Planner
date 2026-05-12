@@ -357,7 +357,7 @@ function parsePositiveFloat(value: string): number | null {
 }
 
 export function ProfileScreen({ userId, displayName }: { userId: string; displayName?: string | null }) {
-  const { measurements, updateMeasurements } = useAppState();
+  const { measurements, updateMeasurements, syncUserProfile } = useAppState();
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -450,6 +450,7 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
         birthday: birthday.trim() || null,
       });
       setProfile(updated);
+      syncUserProfile(updated);
       setPersonalDirty(false);
     } catch {
       Alert.alert('Save failed', 'Could not save personal info. Please try again.');
@@ -457,7 +458,7 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
     } finally {
       setPersonalSaving(false);
     }
-  }, [userId, gender, birthday]);
+  }, [userId, gender, birthday, syncUserProfile]);
 
   const saveBody = useCallback(async () => {
     setBodySaving(true);
@@ -489,13 +490,14 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
         avoidedColors,
       });
       setProfile(updated);
+      syncUserProfile(updated);
       setStyleDirty(false);
     } catch {
       Alert.alert('Save failed', 'Could not save style preferences. Please try again.');
     } finally {
       setStyleSaving(false);
     }
-  }, [userId, skinTone, colorTone, favoriteColors, avoidedColors]);
+  }, [userId, skinTone, colorTone, favoriteColors, avoidedColors, syncUserProfile]);
 
   const saveSizes = useCallback(async () => {
     setSizesSaving(true);
@@ -506,23 +508,25 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
         shoeSize: shoeSize.trim() || null,
       });
       setProfile(updated);
+      syncUserProfile(updated);
       setSizesDirty(false);
     } catch {
       Alert.alert('Save failed', 'Could not save sizes. Please try again.');
     } finally {
       setSizesSaving(false);
     }
-  }, [userId, topSize, bottomSize, shoeSize]);
+  }, [userId, topSize, bottomSize, shoeSize, syncUserProfile]);
 
   const saveAvatar = useCallback(async (newAvatar: AvatarConfig) => {
     setAvatar(newAvatar);
     try {
       const updated = await updateUserProfile(userId, { avatarConfig: newAvatar });
       setProfile(updated);
+      syncUserProfile(updated);
     } catch {
       /* non-blocking */
     }
-  }, [userId]);
+  }, [userId, syncUserProfile]);
 
   // --- Selfie capture + avatar generation ---
 
@@ -572,7 +576,9 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
           avatarImageUrl: canonical,
         };
         setAvatar(newAvatar);
-        await updateUserProfile(userId, { avatarConfig: newAvatar });
+        const updated = await updateUserProfile(userId, { avatarConfig: newAvatar });
+        setProfile(updated);
+        syncUserProfile(updated);
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Avatar generation failed.';
         setAvatarError(msg);
@@ -580,7 +586,7 @@ export function ProfileScreen({ userId, displayName }: { userId: string; display
         setAvatarGenerating(false);
       }
     },
-    [userId, avatar]
+    [userId, avatar, syncUserProfile]
   );
 
   const promptSelfieSource = useCallback(() => {
