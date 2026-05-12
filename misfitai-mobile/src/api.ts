@@ -34,6 +34,92 @@ const VISION_REQUEST_RETRIES = 2;
 const VISION_RETRY_BACKOFF_MS = 450;
 const VISION_FILE_FETCH_TIMEOUT_MS = 45000;
 
+export interface EmailAuthResult {
+  userId: string;
+  email: string;
+}
+
+const mockEmailPasswordStore = new Map<string, string>();
+
+function deriveEmailUserId(emailNormalized: string): string {
+  return `email-${emailNormalized.replace(/@/g, '-at-').replace(/\./g, '-dot-')}`;
+}
+
+function parseEmailAuthResult(rawBody: string): EmailAuthResult {
+  let parsed: { user_id?: string; email?: string } | null = null;
+  try {
+    parsed = JSON.parse(rawBody) as { user_id?: string; email?: string };
+  } catch {
+    throw new ApiError('Invalid auth response', 502, rawBody);
+  }
+  const userId = (parsed?.user_id || '').trim();
+  const normalizedEmail = (parsed?.email || '').trim().toLowerCase();
+  if (!userId || !normalizedEmail) {
+    throw new ApiError('Invalid auth response', 502, rawBody);
+  }
+  return { userId, email: normalizedEmail };
+}
+
+/** Register with email + password (persists via ``POST /auth/register`` when not using mock API). */
+export async function registerEmailPassword(
+  email: string,
+  password: string
+): Promise<EmailAuthResult> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (USE_MOCK_API) {
+    if (mockEmailPasswordStore.has(normalizedEmail)) {
+      throw new ApiError('Account exists', 409, JSON.stringify({ detail: 'Account already exists.' }));
+    }
+    mockEmailPasswordStore.set(normalizedEmail, password);
+    return { userId: deriveEmailUserId(normalizedEmail), email: normalizedEmail };
+  }
+
+  const response = await fetch(`${API_BASE_URL}/auth/register`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: normalizedEmail, password }),
+  });
+  const rawBody = await response.text();
+  if (!response.ok) {
+    throw new ApiError(
+      `API request failed: ${response.status} ${response.statusText}`,
+      response.status,
+      rawBody
+    );
+  }
+  return parseEmailAuthResult(rawBody);
+}
+
+/** Log in with email + password (``POST /auth/login``). */
+export async function loginEmailPassword(
+  email: string,
+  password: string
+): Promise<EmailAuthResult> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (USE_MOCK_API) {
+    const storedPassword = mockEmailPasswordStore.get(normalizedEmail);
+    if (!storedPassword || storedPassword !== password) {
+      throw new ApiError('Invalid credentials', 401, JSON.stringify({ detail: 'Incorrect email or password.' }));
+    }
+    return { userId: deriveEmailUserId(normalizedEmail), email: normalizedEmail };
+  }
+
+  const response = await fetch(`${API_BASE_URL}/auth/login`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: normalizedEmail, password }),
+  });
+  const rawBody = await response.text();
+  if (!response.ok) {
+    throw new ApiError(
+      `API request failed: ${response.status} ${response.statusText}`,
+      response.status,
+      rawBody
+    );
+  }
+  return parseEmailAuthResult(rawBody);
+}
+
 /** After OAuth login, record user for GET /api/metrics ``signups`` (no wardrobe required). */
 export function registerSignupWithBackend(userId: string): void {
   if (!userId?.trim() || USE_MOCK_API) return;

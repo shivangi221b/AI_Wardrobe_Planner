@@ -2,6 +2,8 @@ import {
   ApiError,
   isApiError,
   getApiErrorMessage,
+  registerEmailPassword,
+  loginEmailPassword,
   profileUpdateToApiPayload,
   API_BASE_URL,
   generateOutfitPreview,
@@ -79,6 +81,43 @@ describe('API_BASE_URL', () => {
   it('is defined and does not end with a slash', () => {
     expect(typeof API_BASE_URL).toBe('string');
     expect(API_BASE_URL).not.toMatch(/\/$/);
+  });
+});
+
+// ------------------------------------------------------------------
+// Email/password auth (mock mode)
+// ------------------------------------------------------------------
+
+describe('email/password auth (mock mode)', () => {
+  it('registers a new email account and returns normalized profile', async () => {
+    const email = `new-user-${Date.now()}@Example.COM`;
+    const result = await registerEmailPassword(email, 'hunter42!');
+    expect(result.email).toBe(email.toLowerCase());
+    expect(result.userId).toContain('email-new-user-');
+  });
+
+  it('rejects duplicate email registration', async () => {
+    const email = `dup-user-${Date.now()}@example.com`;
+    await registerEmailPassword(email, 'hunter42!');
+    await expect(registerEmailPassword(email, 'otherpass1')).rejects.toMatchObject({
+      status: 409,
+    });
+  });
+
+  it('allows login with the registered credentials', async () => {
+    const email = `login-user-${Date.now()}@example.com`;
+    await registerEmailPassword(email, 'correctpass1');
+    const login = await loginEmailPassword(email, 'correctpass1');
+    expect(login.email).toBe(email.toLowerCase());
+    expect(login.userId).toContain('email-login-user-');
+  });
+
+  it('rejects login with a wrong password', async () => {
+    const email = `wrong-pass-${Date.now()}@example.com`;
+    await registerEmailPassword(email, 'correctpass1');
+    await expect(loginEmailPassword(email, 'wrongpass')).rejects.toMatchObject({
+      status: 401,
+    });
   });
 });
 
