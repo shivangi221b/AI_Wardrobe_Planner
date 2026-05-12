@@ -155,39 +155,12 @@ export function EventsScreen({
         <Text style={styles.screenSubtitle}>
           Set one event per day and generate seven minimalist looks from your wardrobe.
         </Text>
-        <Text style={styles.calendarExplainer}>
+        {/* <Text style={styles.calendarExplainer}>
           Live calendar import uses Google Calendar and only works when you signed in with Google (with
           calendar access). Otherwise use{' '}
           <Text style={styles.calendarExplainerEm}>Use demo week</Text> or tap an event type for each
-          day — no Google required.
-        </Text>
-
-        <View style={styles.actionsRow}>
-          <Pressable
-            onPress={handleConnect}
-            disabled={connecting}
-            style={[styles.connectButton, isCalendarConnected && styles.connectButtonActive]}
-          >
-            <Text style={[styles.connectButtonText, isCalendarConnected && styles.connectButtonTextActive]}>
-              {connecting
-                ? isCalendarConnected
-                  ? 'Updating...'
-                  : 'Connecting...'
-                : isCalendarConnected
-                ? 'Update calendar'
-                : 'Connect calendar'}
-            </Text>
-          </Pressable>
-          <Pressable
-            style={styles.demoWeekButton}
-            onPress={() => {
-              setError(null);
-              useDemoWeek();
-            }}
-          >
-            <Text style={styles.demoWeekText}>Use demo week</Text>
-          </Pressable>
-        </View>
+          day — no Google required. */}
+        {/* </Text> */}
 
         <View style={styles.actionsRow}>
           <Pressable
@@ -313,6 +286,16 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: palette.muted,
     fontFamily: type.body,
+  },
+  calendarExplainer: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: palette.muted,
+    fontFamily: type.body,
+  },
+  calendarExplainerEm: {
+    fontFamily: type.bodyDemi,
+    color: palette.inkSoft,
   },
   actionsRow: {
     marginTop: 2,

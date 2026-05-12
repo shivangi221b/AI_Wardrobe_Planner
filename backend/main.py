@@ -158,6 +158,20 @@ class SearchGarmentResult(BaseModel):
     source_url: Optional[str] = None
 
 
+class StarterGarmentPreviewRequest(BaseModel):
+    """Text-only starter item: generates a product-style image via the same image stack as vision."""
+
+    name: str
+    category: GarmentCategory
+    color: Optional[str] = None
+    formality: Optional[GarmentFormality] = None
+    seasonality: Optional[GarmentSeasonality] = None
+    size: Optional[str] = None
+    brand: Optional[str] = None
+    material: Optional[str] = None
+    pattern: Optional[str] = None
+
+
 class VisionPreviewItem(BaseModel):
     image_url: HttpUrl
     category: GarmentCategory
@@ -168,6 +182,8 @@ class VisionPreviewItem(BaseModel):
     fit_notes: Optional[str] = None
     formality: Optional[GarmentFormality] = None
     seasonality: Optional[GarmentSeasonality] = None
+    brand: Optional[str] = None
+    size: Optional[str] = None
 
 
 class VisionCommitRequest(BaseModel):
@@ -366,6 +382,80 @@ def add_wardrobe_items_bulk(user_id: str, request: BulkAddGarmentRequest) -> Lis
         )
         results.append(insert_garment(garment))
     return results
+
+
+def _build_starter_garment_prompt(req: StarterGarmentPreviewRequest) -> str:
+    name = (req.name or "").strip()
+    if not name:
+        raise ValueError("Garment name is required.")
+    parts = [
+        "Professional e-commerce product photo of a single garment, centered, pure white seamless "
+        "background, soft studio lighting, subtle floor shadow, no hanger, no model, no hands, "
+        "high detail fashion photography.",
+        f"Garment category: {req.category.value}.",
+        f"Product style: {name}.",
+    ]
+    color = (req.color or "").strip()
+    if color:
+        parts.append(f"Primary color: {color}.")
+    pattern = (req.pattern or "").strip()
+    if pattern:
+        parts.append(f"Pattern: {pattern}.")
+    material = (req.material or "").strip()
+    if material:
+        parts.append(f"Material: {material}.")
+    brand = (req.brand or "").strip()
+    if brand:
+        parts.append(
+            "Brand-inspired silhouette only (do not render readable logos or trademark graphics): "
+            f"{brand}."
+        )
+    parts.append("Full garment visible, crisp edges, photorealistic.")
+    return " ".join(parts)
+
+
+def _starter_garment_preview_sync(user_id: str, request: StarterGarmentPreviewRequest) -> VisionPreviewItem:
+    from vision.image_gen import generate_garment_image
+
+    from .storage import upload_garment_image
+
+    prompt = _build_starter_garment_prompt(request)
+    image_bytes = generate_garment_image(prompt)
+    asset_id = str(uuid4())
+    public_url = upload_garment_image(user_id, asset_id, image_bytes)
+    formality = request.formality or GarmentFormality.CASUAL
+    seasonality = request.seasonality or GarmentSeasonality.ALL_SEASON
+    display_name = (request.name or "").strip()
+    return VisionPreviewItem(
+        image_url=public_url,
+        category=request.category,
+        sub_category=display_name or None,
+        color_primary=(request.color or "").strip() or None,
+        pattern=(request.pattern or "").strip() or None,
+        material=(request.material or "").strip() or None,
+        fit_notes=None,
+        formality=formality,
+        seasonality=seasonality,
+        brand=(request.brand or "").strip() or None,
+        size=(request.size or "").strip() or None,
+    )
+
+
+@app.post("/wardrobe/{user_id}/starter-garment-preview", response_model=VisionPreviewItem)
+async def starter_garment_preview_endpoint(
+    user_id: str, request: StarterGarmentPreviewRequest
+) -> VisionPreviewItem:
+    """
+    Generate a product-style garment image from catalog-style metadata (onboarding),
+    upload it to storage, and return a vision preview row suitable for ``/vision/commit``.
+    """
+    try:
+        return await run_in_threadpool(_starter_garment_preview_sync, user_id, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        logger.exception("Starter garment preview failed user_id=%s", user_id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 class StylePreferencesRequest(BaseModel):
@@ -776,6 +866,8 @@ def _commit_preview_items_sync(user_id: str, items: List[VisionPreviewItem]) -> 
             fit_notes=item.fit_notes,
             formality=formality,
             seasonality=seasonality,
+            brand=item.brand,
+            size=item.size,
             tags=tags,
             created_at=now,
             updated_at=now,

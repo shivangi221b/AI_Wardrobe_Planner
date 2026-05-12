@@ -26,6 +26,30 @@ from datetime import datetime, timezone
 _NOW = datetime(2026, 4, 14, 12, 0, 0, tzinfo=timezone.utc)
 
 
+def _make_item(
+    id: str,
+    category: GarmentCategory,
+    sub_category: str | None = None,
+    formality: GarmentFormality | None = GarmentFormality.CASUAL,
+    material: str | None = None,
+    fit_notes: str | None = None,
+) -> GarmentItem:
+    tags = build_garment_tags(category, formality)
+    return GarmentItem(
+        id=id,
+        user_id="u1",
+        primary_image_url="https://x.com/img.jpg",
+        category=category,
+        sub_category=sub_category,
+        formality=formality,
+        material=material,
+        fit_notes=fit_notes,
+        tags=tags,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
 def _make_top(
     id: str,
     color: str | None,
@@ -124,12 +148,16 @@ class TestPickGarment:
         assert result is not None
         assert result.id in top_ids
 
-    def test_returns_none_when_pool_empty(self, mock_wardrobe):
+    def test_extra_item_filter_can_empty_pool(self, mock_wardrobe):
+        def _no_op(g: GarmentItem) -> bool:
+            return False
+
         result = _pick_garment(
             mock_wardrobe,
-            lambda g: False,
-            [frozenset({"casual"})],
+            _is_top,
+            [frozenset({"formal"})],
             used_ids=set(),
+            extra_item_filter=_no_op,
         )
         assert result is None
 
@@ -184,6 +212,73 @@ class TestGenerateWeekRecommendations:
             top = next((g for g in mock_wardrobe if g.id == rec.top_id), None)
             assert top is not None
             assert top.formality in (GarmentFormality.FORMAL, GarmentFormality.BUSINESS)
+
+    async def test_gym_skips_tailoring_blob_when_casual_top_exists(self, _mock_llm):
+        wardrobe = [
+            _make_item(
+                "blazerish",
+                GarmentCategory.TOP,
+                "jacket",
+                None,
+                material="tailored wool blazer",
+            ),
+            _make_item("tee", GarmentCategory.TOP, "t-shirt", GarmentFormality.CASUAL),
+            _make_item("leg", GarmentCategory.BOTTOM, "leggings", GarmentFormality.CASUAL),
+        ]
+        events = [WeekEvent(day="Tuesday", event_type="gym")]
+        recs = await generate_week_recommendations(wardrobe, events)
+        assert recs[0].top_id == "tee"
+
+    async def test_date_night_first_slot_prefers_dress(self, _mock_llm):
+        wardrobe = [
+            _make_item("d1", GarmentCategory.DRESS, "slip dress", GarmentFormality.SMART_CASUAL),
+            _make_item("t1", GarmentCategory.TOP, "blouse", GarmentFormality.SMART_CASUAL),
+            _make_item("b1", GarmentCategory.BOTTOM, "skirt", GarmentFormality.SMART_CASUAL),
+        ]
+        events = [WeekEvent(day="Friday", event_type="date_night")]
+        recs = await generate_week_recommendations(wardrobe, events)
+        assert recs[0].dress_id == "d1"
+
+    async def test_date_night_two_events_both_use_dresses_when_available(self, _mock_llm):
+        wardrobe = [
+            _make_item("d1", GarmentCategory.DRESS, "Red Dress", GarmentFormality.FORMAL),
+            _make_item("d2", GarmentCategory.DRESS, "Pink Dress", GarmentFormality.FORMAL),
+            _make_item("t1", GarmentCategory.TOP, "blouse", GarmentFormality.SMART_CASUAL),
+            _make_item("b1", GarmentCategory.BOTTOM, "skirt", GarmentFormality.SMART_CASUAL),
+        ]
+        events = [
+            WeekEvent(day="Friday", event_type="date_night"),
+            WeekEvent(day="Saturday", event_type="date_night"),
+        ]
+        recs = await generate_week_recommendations(wardrobe, events)
+        assert recs[0].dress_id in ("d1", "d2")
+        assert recs[1].dress_id in ("d1", "d2")
+        assert recs[0].dress_id != recs[1].dress_id
+
+    async def test_date_night_one_dress_two_events_second_is_separates(self, _mock_llm):
+        wardrobe = [
+            _make_item("d1", GarmentCategory.DRESS, "Red Dress", GarmentFormality.FORMAL),
+            _make_item("t1", GarmentCategory.TOP, "blouse", GarmentFormality.SMART_CASUAL),
+            _make_item("b1", GarmentCategory.BOTTOM, "skirt", GarmentFormality.SMART_CASUAL),
+        ]
+        events = [
+            WeekEvent(day="Friday", event_type="date_night"),
+            WeekEvent(day="Saturday", event_type="date_night"),
+        ]
+        recs = await generate_week_recommendations(wardrobe, events)
+        assert recs[0].dress_id == "d1"
+        assert recs[1].dress_id is None
+        assert recs[1].top_id is not None
+
+    async def test_work_meeting_prefers_shirt_over_blazer_when_both_match(self, _mock_llm):
+        wardrobe = [
+            _make_item("blz", GarmentCategory.TOP, "blazer", GarmentFormality.BUSINESS),
+            _make_item("shirt", GarmentCategory.TOP, "shirt", GarmentFormality.BUSINESS),
+            _make_item("pants", GarmentCategory.BOTTOM, "pants", GarmentFormality.BUSINESS),
+        ]
+        events = [WeekEvent(day="Monday", event_type="work_meeting")]
+        recs = await generate_week_recommendations(wardrobe, events)
+        assert recs[0].top_id == "shirt"
 
 
 # -- Colour preference scoring ----------------------------------------------

@@ -4,6 +4,14 @@ recommendation.py — Outfit recommendation engine.
 Garment selection is rules-based (formality chains + context filtering).
 Explanation generation is delegated to the LLM via ``backend.llm``.
 
+Active sessions (``gym``) add a tailoring / dress-shoe text filter so
+mis-tagged or untagged office pieces do not surface when the wardrobe also
+contains movement-friendly options (e.g. leggings and a tee).
+
+Successive ``date_night`` events each prefer a **dress** when any dress matches
+the formality chain, rotating through unused dresses before falling back to
+separates.
+
 Deliberately free of FastAPI imports so it can be unit-tested in isolation.
 Weather/location logic is intentionally out of scope for the MVP; the WeekEvent
 fields for those are accepted by the models but ignored here.
@@ -11,6 +19,8 @@ fields for those are accepted by the models but ignored here.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
 from typing import Optional
 
 from .llm import generate_outfit_explanation
@@ -69,13 +79,18 @@ _FORMALITY_FALLBACK_CHAINS: dict[str, list[frozenset[str]]] = {
         frozenset({"smart_casual"}),
         # No casual fallback — a tank top at a work meeting erodes trust.
     ],
+    # Prefer relaxed / approachable before boardroom formality so real separates
+    # (e.g. a simple dress, knit + skirt, denim) surface before a suit jacket.
     "date_night": [
         frozenset({"smart_casual"}),
-        frozenset({"formal", "business"}),
         frozenset({"casual"}),
+        frozenset({"formal", "business"}),
     ],
+    # Strictly casual first; smart_casual second for pieces that read as studio /
+    # street-sport (still filtered — see _gym_item_allowed).
     "gym": [
         frozenset({"casual"}),
+        frozenset({"smart_casual"}),
     ],
     "casual": [
         frozenset({"casual"}),
@@ -97,7 +112,65 @@ _EXCLUDED_SUBCATEGORIES_BY_EVENT: dict[str, frozenset[str]] = {
     "work_meeting": frozenset(
         {"tank_top", "crop_top", "graphic_tee", "halter_neck", "bodysuit", "hoodie"}
     ),
+    # Keep obvious office / evening footwear and tailoring out of active sessions.
+    "gym": frozenset(
+        {
+            "blazer",
+            "vest",
+            "oxford",
+            "heels",
+            "pumps",
+            "loafers",
+            "dress_pants",
+        }
+    ),
 }
+
+
+def _garment_search_blob(item: GarmentItem) -> str:
+    """Lowercased, de-underscored text used for light-weight context matching."""
+    parts: list[str] = [
+        item.category.value,
+        item.sub_category or "",
+        item.material or "",
+        item.fit_notes or "",
+    ]
+    parts.extend(item.tags or [])
+    return " ".join(str(p) for p in parts if p).lower().replace("_", " ")
+
+
+# Substrings that signal structured / evening tailoring — inappropriate for gym.
+# Use ``\bsuit\b`` (not a bare "suit" substring) so words like "suiting" do not false-positive.
+_GYM_TAILORING_SUBSTRINGS: frozenset[str] = frozenset(
+    {
+        "blazer",
+        "tux",
+        "tailored jacket",
+        "tailored trouser",
+        "dress pant",
+        "dress shirt",
+        "oxford shirt",
+        "pencil skirt",
+        "stiletto",
+        "pump",
+    }
+)
+
+_RE_GYM_HEEL_OR_DRESS_SHOE = re.compile(
+    r"\b(heels?|pumps?|stilettos?|oxfords?|loafers?)\b",
+    re.IGNORECASE,
+)
+_RE_SUIT_WORD = re.compile(r"\bsuit\b", re.IGNORECASE)
+
+
+def _gym_item_allowed(item: GarmentItem) -> bool:
+    """Reject office / evening tailoring for active sessions (beyond sub_category blocklists)."""
+    blob = _garment_search_blob(item)
+    if _RE_SUIT_WORD.search(blob):
+        return False
+    if _RE_GYM_HEEL_OR_DRESS_SHOE.search(blob):
+        return False
+    return not any(h in blob for h in _GYM_TAILORING_SUBSTRINGS)
 
 
 def _normalize_sub_category(value: str) -> str:
@@ -308,6 +381,17 @@ def _is_excluded_for_event(item: GarmentItem, event_type: str) -> bool:
     return False
 
 
+def _structured_jacket_like(item: GarmentItem) -> bool:
+    """True when the piece reads as a suit jacket / blazer (outer-layer top)."""
+    b = _garment_search_blob(item)
+    return (
+        "blazer" in b
+        or "sport coat" in b
+        or "suit jacket" in b
+        or ("suit" in b and "jacket" in b)
+    )
+
+
 def _is_dress(item: GarmentItem) -> bool:
     return (
         item.category.value in _DRESS_CATEGORIES
@@ -323,6 +407,9 @@ def _pick_garment(
     event_type: str = "",
     user_size_label: Optional[str] = None,
     user_profile: Optional[UserProfile] = None,
+    extra_item_filter: Optional[Callable[[GarmentItem], bool]] = None,
+    tiebreak_rank: Optional[Callable[[GarmentItem], int]] = None,
+    allow_reuse: bool = True,
 ) -> Optional[GarmentItem]:
     """
     Select the best garment from *pool* for the given type, formality chain,
@@ -340,6 +427,12 @@ def _pick_garment(
       Final fallback:
         7. None — no appropriate garment found
 
+    When *tiebreak_rank* is provided, lower ranks sort earlier within the same
+    ``times_recommended`` value (e.g. deprioritise blazer-like tops for work).
+
+    When *allow_reuse* is False, items already in *used_ids* are never selected,
+    so another event can fall back to separates instead of repeating the same dress.
+
     Colour scoring is computed once per call via :class:`_ColorPrefCtx` to
     avoid rebuilding token sets for every garment comparison.  Size matching
     always takes priority over colour avoidance — a correctly-sized
@@ -349,6 +442,8 @@ def _pick_garment(
         g for g in pool
         if is_type_fn(g) and not g.hidden_from_recommendations and not _is_excluded_for_event(g, event_type)
     ]
+    if extra_item_filter is not None:
+        candidates = [g for g in candidates if extra_item_filter(g)]
     if not candidates:
         return None
 
@@ -359,8 +454,13 @@ def _pick_garment(
     # compute the score once.
     color_scores: dict[str, float] = {g.id: ctx.score(g) for g in candidates}
 
-    # Primary sort: variety (times_recommended asc); tiebreak: colour score desc.
-    candidates.sort(key=lambda g: (g.times_recommended, -color_scores[g.id]))
+    # Primary sort: variety (times_recommended asc); optional tiebreak (lower first);
+    # then colour score desc.
+    def _sort_key(g: GarmentItem) -> tuple:
+        tb = tiebreak_rank(g) if tiebreak_rank is not None else 0
+        return (g.times_recommended, tb, -color_scores[g.id])
+
+    candidates.sort(key=_sort_key)
 
     def formality_matches(g: GarmentItem, tier: frozenset[str]) -> bool:
         return g.formality is not None and g.formality.value in tier
@@ -396,6 +496,9 @@ def _pick_garment(
         """Split *subset* into unused / in-use and pick from each in order."""
         if not subset:
             return None
+        if not allow_reuse:
+            unused_only = [g for g in subset if g.id not in used_ids]
+            return _best(unused_only)
         unused = [g for g in subset if g.id not in used_ids]
         in_use = [g for g in subset if g.id in used_ids]
         result = _best(unused)
@@ -489,28 +592,80 @@ async def generate_week_recommendations(
         formality_chain = _FORMALITY_FALLBACK_CHAINS.get(
             event.event_type, _FALLBACK_FORMALITY_CHAIN
         )
+        gym_filter: Optional[Callable[[GarmentItem], bool]] = (
+            _gym_item_allowed if event.event_type == "gym" else None
+        )
+        work_top_bias: Optional[Callable[[GarmentItem], int]] = None
+        if event.event_type == "work_meeting":
+            work_top_bias = lambda g: 1 if _structured_jacket_like(g) else 0
+
+        # Prefer a dress whenever one fits the chain so formal dresses surface
+        # for evening plans; ``used_ids`` rotates through multiple dresses across the week.
+        if event.event_type == "date_night":
+            dress_first = _pick_garment(
+                wardrobe,
+                _is_dress,
+                formality_chain,
+                used_ids,
+                event_type=event.event_type,
+                user_size_label=user_size_label,
+                user_profile=user_profile,
+                extra_item_filter=None,
+                allow_reuse=False,
+            )
+            if dress_first is not None:
+                explanation = await generate_outfit_explanation(
+                    event.day, event.event_type, dress_first, None
+                )
+                if dress_first.id:
+                    used_ids.add(dress_first.id)
+                recommendations.append(
+                    DayOutfitSuggestion(
+                        day=event.day,
+                        event_type=event.event_type,
+                        dress_id=dress_first.id,
+                        dress_name=_display_name(dress_first) or "No item found",
+                        top_name="No item found",
+                        bottom_name="No item found",
+                        explanation=explanation,
+                    )
+                )
+                continue
 
         top = _pick_garment(
-            wardrobe, _is_top, formality_chain, used_ids,
+            wardrobe,
+            _is_top,
+            formality_chain,
+            used_ids,
             event_type=event.event_type,
             user_size_label=user_size_label,
             user_profile=user_profile,
+            extra_item_filter=gym_filter,
+            tiebreak_rank=work_top_bias,
         )
         bottom = _pick_garment(
-            wardrobe, _is_bottom, formality_chain, used_ids,
+            wardrobe,
+            _is_bottom,
+            formality_chain,
+            used_ids,
             event_type=event.event_type,
             user_size_label=user_size_label,
             user_profile=user_profile,
+            extra_item_filter=gym_filter,
         )
 
         # If top or bottom is missing, try a dress as a fallback
         dress = None
         if top is None or bottom is None:
             dress = _pick_garment(
-                wardrobe, _is_dress, formality_chain, used_ids,
+                wardrobe,
+                _is_dress,
+                formality_chain,
+                used_ids,
                 event_type=event.event_type,
                 user_size_label=user_size_label,
                 user_profile=user_profile,
+                extra_item_filter=gym_filter,
             )
 
         if dress is not None and (top is None or bottom is None):

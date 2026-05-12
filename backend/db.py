@@ -662,23 +662,52 @@ def delete_garment(garment_id: str, user_id: str) -> bool:
 
     Returns ``True`` if the garment was found and deleted, ``False`` otherwise.
     """
+    from .storage import delete_garment_image_assets
+
     if _use_local_store():
         wardrobe = _local_wardrobes.get(user_id, [])
+        garment = next((g for g in wardrobe if g.id == garment_id), None)
+        if garment is None:
+            return False
+        urls: List[str] = [str(garment.primary_image_url)]
+        urls.extend(str(u) for u in garment.alt_image_urls)
+        delete_garment_image_assets(urls)
         new_wardrobe = [g for g in wardrobe if g.id != garment_id]
-        found = len(new_wardrobe) < len(wardrobe)
         _local_wardrobes[user_id] = new_wardrobe
-        return found
+        return True
     try:
+        client = get_supabase_client()
+        peek = (
+            client.table(_table_name())
+            .select("primary_image_url, alt_image_urls")
+            .eq("id", garment_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        rows = peek.data or []
+        if not rows:
+            return False
+        row = rows[0]
+        urls: List[str] = []
+        primary = row.get("primary_image_url")
+        if primary:
+            urls.append(str(primary))
+        alts = row.get("alt_image_urls")
+        if isinstance(alts, list):
+            urls.extend(str(a) for a in alts if a)
+        delete_garment_image_assets(urls)
+
         result = (
-            get_supabase_client()
-            .table(_table_name())
+            client.table(_table_name())
             .delete()
             .eq("id", garment_id)
             .eq("user_id", user_id)
+            .select("id")
             .execute()
         )
-        rows = result.data or []
-        return len(rows) > 0
+        deleted_rows = result.data or []
+        return len(deleted_rows) > 0
     except Exception:
         logger.exception("delete_garment failed garment_id=%s", garment_id)
         raise

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
+import re
+import urllib.parse
 from functools import lru_cache
 from pathlib import Path
-import logging
-import re
-from typing import List
+from typing import List, Optional
 
 from supabase import Client, create_client
 
@@ -48,6 +49,8 @@ __all__ = [
     "store_week_events",
     "user_exists",
     "upload_garment_image",
+    "delete_garment_image_assets",
+    "garment_storage_object_path_from_public_url",
 ]
 
 @lru_cache(maxsize=1)
@@ -94,6 +97,88 @@ def _save_garment_image_locally(user_id: str, garment_id: str, image_bytes: byte
     return url
 
 
+def _garments_bucket_name() -> str:
+    return os.getenv("SUPABASE_GARMENTS_BUCKET", "garments").strip() or "garments"
+
+
+def garment_storage_object_path_from_public_url(public_url: str, bucket: Optional[str] = None) -> Optional[str]:
+    """
+    Given a Supabase *public* object URL, return the object key inside *bucket*
+    (e.g. ``user-id/uuid.jpg``), or ``None`` if the URL does not point at that bucket.
+    """
+    if not public_url or not str(public_url).strip():
+        return None
+    raw = urllib.parse.unquote(str(public_url).strip())
+    b = bucket or _garments_bucket_name()
+    for marker in (f"/storage/v1/object/public/{b}/", f"/object/public/{b}/"):
+        if marker in raw:
+            path = raw.split(marker, 1)[1]
+            path = path.split("?", 1)[0].split("#", 1)[0].strip().lstrip("/")
+            return path or None
+    return None
+
+
+def delete_garment_image_assets(image_urls: List[Optional[str]]) -> None:
+    """
+    Best-effort deletion of garment images from Supabase Storage or the local dev folder.
+
+    Callers should invoke this *before* removing the DB row so we still know the URLs.
+    External URLs (e.g. SerpAPI thumbnails) are ignored.
+    """
+    for raw in image_urls:
+        if not raw:
+            continue
+        url = str(raw).strip()
+        if not url:
+            continue
+        _try_delete_supabase_garment_object(url)
+        _try_delete_local_garment_file(url)
+
+
+def _try_delete_supabase_garment_object(public_url: str) -> None:
+    path = garment_storage_object_path_from_public_url(public_url)
+    if not path:
+        return
+    if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_SERVICE_KEY"):
+        return
+    bucket = _garments_bucket_name()
+    try:
+        client = get_supabase_client()
+        client.storage.from_(bucket).remove([path])
+        logger.info("Deleted garment image from Supabase bucket=%s path=%s", bucket, path)
+    except Exception:
+        logger.warning(
+            "Could not delete garment image from Supabase bucket=%s path=%s",
+            bucket,
+            path,
+            exc_info=True,
+        )
+
+
+_LOCAL_GARMENT_URL_RE = re.compile(r"/assets/local-garments/([^/]+)/([^/?#]+)")
+
+
+def _try_delete_local_garment_file(url: str) -> None:
+    m = _LOCAL_GARMENT_URL_RE.search(url)
+    if not m:
+        return
+    safe_user, filename = m.group(1), m.group(2)
+    root = _local_storage_dir().resolve()
+    candidate = (root / safe_user / filename).resolve()
+    try:
+        if not str(candidate).startswith(str(root)):
+            logger.warning("Refusing to delete local garment path outside root: %s", candidate)
+            return
+    except (OSError, ValueError):
+        return
+    try:
+        if candidate.is_file():
+            candidate.unlink()
+            logger.info("Deleted local garment image path=%s", candidate)
+    except Exception:
+        logger.warning("Could not delete local garment file path=%s", candidate, exc_info=True)
+
+
 def upload_garment_image(user_id: str, garment_id: str, image_bytes: bytes) -> str:
     mode = _storage_mode()
     if mode == "local":
@@ -108,7 +193,7 @@ def upload_garment_image(user_id: str, garment_id: str, image_bytes: bytes) -> s
         )
         return _save_garment_image_locally(user_id, garment_id, image_bytes)
 
-    bucket = os.getenv("SUPABASE_GARMENTS_BUCKET", "garments")
+    bucket = _garments_bucket_name()
     path = f"{user_id}/{garment_id}.jpg"
     client = get_supabase_client()
 

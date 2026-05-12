@@ -158,6 +158,8 @@ export interface VisionPreviewItem {
   fit_notes?: string | null;
   formality?: string | null;
   seasonality?: string | null;
+  brand?: string | null;
+  size?: string | null;
 }
 
 export interface GarmentSearchResult {
@@ -174,7 +176,7 @@ export interface GarmentSearchOptions {
 }
 export interface ConfirmSearchAddPayload {
   name: string;
-  category: 'top' | 'bottom' | 'shoes' | 'accessory';
+  category: GarmentCategory;
   color?: string;
   formality?: GarmentFormality;
   seasonality?: GarmentSeasonality;
@@ -234,9 +236,13 @@ function normalizeSeasonality(value?: string | null): GarmentSeasonality {
   return 'all_season';
 }
 
-function normalizeCategory(value?: string): GarmentCategory {
-  if (value && validCategories.includes(value as GarmentCategory)) {
-    return value as GarmentCategory;
+function normalizeCategory(value?: string | null): GarmentCategory {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!raw || raw === 'null' || raw === 'undefined') {
+    return 'top';
+  }
+  if (validCategories.includes(raw as GarmentCategory)) {
+    return raw as GarmentCategory;
   }
   return 'top';
 }
@@ -294,7 +300,12 @@ function mapGarment(item: WardrobeApiItem): Garment {
     gender: normalizeGarmentGender(item.gender),
     timesRecommended: item.times_recommended ?? 0,
     hiddenFromRecommendations: item.hidden_from_recommendations ?? false,
-    tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
+    tags: Array.isArray(item.tags)
+      ? item.tags
+          .filter((t) => t != null)
+          .map((t) => String(t).trim())
+          .filter((t) => t && t.toLowerCase() !== 'null' && t.toLowerCase() !== 'undefined')
+      : [],
   };
 }
 
@@ -750,6 +761,58 @@ export async function previewGarmentsFromVision(
     VISION_REQUEST_RETRIES
   );
   return Array.isArray(response) ? response : [];
+}
+
+export interface StarterGarmentPreviewPayload {
+  name: string;
+  category: GarmentCategory;
+  color?: string;
+  formality?: GarmentFormality;
+  seasonality?: GarmentSeasonality;
+  size?: string;
+  brand?: string;
+  material?: string;
+  pattern?: string;
+}
+
+export async function previewStarterGarment(
+  userId: string,
+  payload: StarterGarmentPreviewPayload
+): Promise<VisionPreviewItem> {
+  if (USE_MOCK_API) {
+    return {
+      image_url: 'https://example.com/garment-placeholder.jpg',
+      category: payload.category,
+      sub_category: payload.name.trim(),
+      color_primary: payload.color?.trim() || null,
+      formality: payload.formality ?? 'casual',
+      seasonality: payload.seasonality ?? 'all_season',
+      size: payload.size?.trim() || null,
+      brand: payload.brand?.trim() || null,
+      material: payload.material?.trim() || null,
+      pattern: payload.pattern?.trim() || null,
+    };
+  }
+
+  const response = await requestJsonWithRetry<VisionPreviewItem>(
+    `/wardrobe/${encodeURIComponent(userId)}/starter-garment-preview`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        name: payload.name.trim(),
+        category: payload.category,
+        color: payload.color?.trim() || undefined,
+        formality: payload.formality,
+        seasonality: payload.seasonality,
+        size: payload.size?.trim() || undefined,
+        brand: payload.brand?.trim() || undefined,
+        material: payload.material?.trim() || undefined,
+        pattern: payload.pattern?.trim() || undefined,
+      }),
+    },
+    VISION_REQUEST_RETRIES
+  );
+  return response;
 }
 
 export async function commitVisionItems(

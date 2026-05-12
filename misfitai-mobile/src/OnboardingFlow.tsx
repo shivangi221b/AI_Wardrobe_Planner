@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -14,9 +14,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { palette, radius, type } from './theme';
 import { useAppState } from './AppStateContext';
-import { addGarmentsBulk, getApiErrorMessage, saveStylePreferences } from './api';
+import {
+  addGarmentsBulk,
+  commitVisionItems,
+  getApiErrorMessage,
+  previewStarterGarment,
+  saveStylePreferences,
+  USE_MOCK_API,
+} from './api';
+import type { AddGarmentPayload, VisionPreviewItem } from './api';
 import { SEARCH_BRANDS } from './searchOptions';
-import type { GarmentCategory, GarmentFormality, DayRecommendation } from './types';
+import type {
+  GarmentCategory,
+  GarmentFormality,
+  GarmentSeasonality,
+  DayRecommendation,
+} from './types';
 import type { AuthMode, AuthProvider, UserProfile } from './AuthScreen';
 
 // ---- Session type (mirrors App.tsx — keep in sync) -------------------------
@@ -75,6 +88,42 @@ const CATALOG_SECTIONS: { category: GarmentCategory; label: string }[] = [
   { category: 'shoes', label: 'Shoes' },
   { category: 'outerwear', label: 'Outerwear' },
 ];
+
+const FORMALITY_OPTIONS: GarmentFormality[] = ['casual', 'smart_casual', 'business', 'formal'];
+
+const SEASONALITY_OPTIONS: GarmentSeasonality[] = ['all_season', 'hot', 'mild', 'cold'];
+
+type CatalogItemConfig = {
+  name: string;
+  color: string;
+  size: string;
+  formality: GarmentFormality;
+  seasonality: GarmentSeasonality;
+};
+
+type CustomWardrobeItem = {
+  id: string;
+  name: string;
+  category: GarmentCategory;
+  color: string;
+  size: string;
+  formality: GarmentFormality;
+  seasonality: GarmentSeasonality;
+};
+
+function humanizeEnum(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function defaultCatalogConfig(item: CatalogItem): CatalogItemConfig {
+  return {
+    name: item.name,
+    color: item.color,
+    size: '',
+    formality: item.formality,
+    seasonality: 'all_season',
+  };
+}
 
 // ---- Style options ---------------------------------------------------------
 
@@ -256,9 +305,17 @@ export function OnboardingFlow({
   const [ownedIds, setOwnedIds] = useState<Set<string>>(new Set());
 
   // Step 3 — review & custom items
+  const [catalogConfigs, setCatalogConfigs] = useState<Record<string, CatalogItemConfig>>({});
   const [customName, setCustomName] = useState('');
   const [customCategory, setCustomCategory] = useState<GarmentCategory>('top');
-  const [customItems, setCustomItems] = useState<Array<{ name: string; category: GarmentCategory }>>([]);
+  const [customColor, setCustomColor] = useState('');
+  const [customSize, setCustomSize] = useState('');
+  const [customFormality, setCustomFormality] = useState<GarmentFormality>('casual');
+  const [customSeasonality, setCustomSeasonality] = useState<GarmentSeasonality>('all_season');
+  const [customItems, setCustomItems] = useState<CustomWardrobeItem[]>([]);
+  const [imageGenProgress, setImageGenProgress] = useState<{ current: number; total: number } | null>(
+    null
+  );
 
   // Build / save state
   const [isSaving, setIsSaving] = useState(false);
@@ -275,6 +332,20 @@ export function OnboardingFlow({
   const selectedCatalogItems = STARTER_CATALOG.filter((i) => ownedIds.has(i.id));
   const totalItemCount = selectedCatalogItems.length + customItems.length;
 
+  useEffect(() => {
+    if (step !== 3) return;
+    setCatalogConfigs((prev) => {
+      const next: Record<string, CatalogItemConfig> = {};
+      for (const id of ownedIds) {
+        const catalog = STARTER_CATALOG.find((i) => i.id === id);
+        if (!catalog) continue;
+        const existing = prev[id];
+        next[id] = existing ?? defaultCatalogConfig(catalog);
+      }
+      return next;
+    });
+  }, [step, ownedIds]);
+
   const filteredBrands = useMemo(() => {
     const q = brandSearch.trim().toLowerCase();
     const pool = showAllBrands ? SEARCH_BRANDS : FEATURED_BRANDS;
@@ -287,38 +358,144 @@ export function OnboardingFlow({
   function addCustomItem() {
     const name = customName.trim();
     if (!name) return;
-    setCustomItems((prev) => [...prev, { name, category: customCategory }]);
+    const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setCustomItems((prev) => [
+      ...prev,
+      {
+        id,
+        name,
+        category: customCategory,
+        color: customColor.trim(),
+        size: customSize.trim(),
+        formality: customFormality,
+        seasonality: customSeasonality,
+      },
+    ]);
     setCustomName('');
+    setCustomColor('');
+    setCustomSize('');
+  }
+
+  function getCatalogConfig(item: CatalogItem): CatalogItemConfig {
+    return catalogConfigs[item.id] ?? defaultCatalogConfig(item);
+  }
+
+  function patchCatalogConfig(itemId: string, patch: Partial<CatalogItemConfig>) {
+    setCatalogConfigs((prev) => {
+      const catalog = STARTER_CATALOG.find((i) => i.id === itemId);
+      if (!catalog) return prev;
+      const base = prev[itemId] ?? defaultCatalogConfig(catalog);
+      return { ...prev, [itemId]: { ...base, ...patch } };
+    });
+  }
+
+  function patchCustomItem(itemId: string, patch: Partial<CustomWardrobeItem>) {
+    setCustomItems((prev) => prev.map((row) => (row.id === itemId ? { ...row, ...patch } : row)));
   }
 
   async function handleBuildWardrobe() {
     setIsSaving(true);
     setSaveError(null);
-    // Build garment list
-    const garmentPayloads = [
-      ...selectedCatalogItems.map((item) => ({
-        name: item.name,
+    setImageGenProgress(null);
+
+    const placeholderImage = 'https://example.com/garment-placeholder.jpg';
+
+    const mockBulkPayloads = [
+      ...selectedCatalogItems.map((item) => {
+        const c = getCatalogConfig(item);
+        return {
+          name: c.name.trim() || item.name,
+          category: item.category,
+          color: c.color,
+          formality: c.formality,
+          seasonality: c.seasonality,
+          size: c.size.trim() || undefined,
+        };
+      }),
+      ...customItems.map((item) => ({
+        name: item.name.trim(),
         category: item.category,
         color: item.color,
         formality: item.formality,
+        seasonality: item.seasonality,
+        size: item.size.trim() || undefined,
       })),
+    ];
+
+    const orderedForVision = [
+      ...selectedCatalogItems.map((item) => {
+        const c = getCatalogConfig(item);
+        return {
+          name: (c.name.trim() || item.name).trim(),
+          category: item.category,
+          color: c.color,
+          formality: c.formality,
+          seasonality: c.seasonality,
+          size: c.size.trim() || undefined,
+        };
+      }),
       ...customItems.map((item) => ({
-        name: item.name,
+        name: item.name.trim(),
         category: item.category,
-        color: '',
-        formality: 'casual' as GarmentFormality,
+        color: item.color,
+        formality: item.formality,
+        seasonality: item.seasonality,
+        size: item.size.trim() || undefined,
       })),
     ];
 
     try {
-      if (garmentPayloads.length > 0) {
-        await addGarmentsBulk(userId, garmentPayloads);
+      if (USE_MOCK_API) {
+        if (mockBulkPayloads.length > 0) {
+          await addGarmentsBulk(userId, mockBulkPayloads);
+        }
+      } else if (orderedForVision.length > 0) {
+        const previews: VisionPreviewItem[] = [];
+        const fallbacks: AddGarmentPayload[] = [];
+        const total = orderedForVision.length;
+        for (let i = 0; i < orderedForVision.length; i += 1) {
+          const row = orderedForVision[i];
+          setImageGenProgress({ current: i + 1, total });
+          try {
+            previews.push(
+              await previewStarterGarment(userId, {
+                name: row.name,
+                category: row.category,
+                color: row.color,
+                formality: row.formality,
+                seasonality: row.seasonality,
+                size: row.size,
+              })
+            );
+          } catch {
+            fallbacks.push({
+              name: row.name,
+              category: row.category,
+              color: row.color ?? '',
+              formality: row.formality,
+              seasonality: row.seasonality,
+              size: row.size,
+              primaryImageUrl: placeholderImage,
+            });
+          }
+        }
+        setImageGenProgress(null);
+        if (previews.length > 0) {
+          await commitVisionItems(userId, previews);
+        }
+        if (fallbacks.length > 0) {
+          await addGarmentsBulk(userId, fallbacks);
+        }
       }
     } catch (error) {
       setSaveError(
-        getApiErrorMessage(error, 'Could not save your starter wardrobe. Try again or skip to your wardrobe.')
+        getApiErrorMessage(
+          error,
+          'Could not save your starter wardrobe. Try again or skip to your wardrobe.'
+        )
       );
       setIsSaving(false);
+      setImageGenProgress(null);
       return;
     }
 
@@ -356,6 +533,7 @@ export function OnboardingFlow({
 
     setStep(4);
     setIsSaving(false);
+    setImageGenProgress(null);
   }
 
   function handleComplete() {
@@ -641,7 +819,7 @@ export function OnboardingFlow({
         >
           {renderHeader(
             'Review & confirm',
-            "Remove anything you don’t own, or add a few more basics.",
+            "Adjust details for each piece, then we'll generate images and save your wardrobe.",
           )}
 
           {totalItemCount > 0 ? (
@@ -649,42 +827,157 @@ export function OnboardingFlow({
               <Text style={st.sectionTitle}>
                 Your starter wardrobe ({totalItemCount})
               </Text>
-              {selectedCatalogItems.map((item) => (
-                <View key={item.id} style={st.reviewRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={st.reviewName}>{item.name}</Text>
-                    <Text style={st.reviewMeta}>
-                      {CATEGORY_LABELS[item.category]} · {item.color}
-                    </Text>
+              <Text style={st.hint}>
+                Edit name, color, size, formality, or season. Each item gets an AI product photo before it is saved.
+              </Text>
+              {selectedCatalogItems.map((item) => {
+                const cfg = getCatalogConfig(item);
+                return (
+                  <View key={item.id} style={st.reviewBlock}>
+                    <View style={st.reviewBlockHeader}>
+                      <Text style={st.reviewBlockLabel}>{CATEGORY_LABELS[item.category]}</Text>
+                      <Pressable
+                        onPress={() =>
+                          setOwnedIds((prev) => {
+                            const next = new Set(prev);
+                            next.delete(item.id);
+                            return next;
+                          })
+                        }
+                        style={st.removeBtn}
+                      >
+                        <Text style={st.removeBtnText}>Remove</Text>
+                      </Pressable>
+                    </View>
+                    <Text style={st.reviewFieldLabel}>Name</Text>
+                    <TextInput
+                      value={cfg.name}
+                      onChangeText={(text) => patchCatalogConfig(item.id, { name: text })}
+                      placeholder="Item name"
+                      placeholderTextColor={palette.muted}
+                      style={st.input}
+                    />
+                    <View style={st.reviewFieldRow}>
+                      <View style={st.reviewFieldCol}>
+                        <Text style={st.reviewFieldLabel}>Color</Text>
+                        <TextInput
+                          value={cfg.color}
+                          onChangeText={(text) => patchCatalogConfig(item.id, { color: text })}
+                          placeholder="e.g. navy"
+                          placeholderTextColor={palette.muted}
+                          style={st.input}
+                        />
+                      </View>
+                      <View style={st.reviewFieldCol}>
+                        <Text style={st.reviewFieldLabel}>Size</Text>
+                        <TextInput
+                          value={cfg.size}
+                          onChangeText={(text) => patchCatalogConfig(item.id, { size: text })}
+                          placeholder="e.g. M"
+                          placeholderTextColor={palette.muted}
+                          style={st.input}
+                        />
+                      </View>
+                    </View>
+                    <Text style={[st.reviewFieldLabel, { marginTop: 8 }]}>Formality</Text>
+                    <View style={st.chipRow}>
+                      {FORMALITY_OPTIONS.map((f) => (
+                        <Chip
+                          key={f}
+                          label={humanizeEnum(f)}
+                          active={cfg.formality === f}
+                          onPress={() => patchCatalogConfig(item.id, { formality: f })}
+                        />
+                      ))}
+                    </View>
+                    <Text style={[st.reviewFieldLabel, { marginTop: 8 }]}>Season</Text>
+                    <View style={st.chipRow}>
+                      {SEASONALITY_OPTIONS.map((s) => (
+                        <Chip
+                          key={s}
+                          label={humanizeEnum(s)}
+                          active={cfg.seasonality === s}
+                          onPress={() => patchCatalogConfig(item.id, { seasonality: s })}
+                        />
+                      ))}
+                    </View>
                   </View>
-                  <Pressable
-                    onPress={() =>
-                      setOwnedIds((prev) => {
-                        const next = new Set(prev);
-                        next.delete(item.id);
-                        return next;
-                      })
-                    }
-                    style={st.removeBtn}
-                  >
-                    <Text style={st.removeBtnText}>Remove</Text>
-                  </Pressable>
-                </View>
-              ))}
-              {customItems.map((item, i) => (
-                <View key={`custom-${i}`} style={st.reviewRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={st.reviewName}>{item.name}</Text>
-                    <Text style={st.reviewMeta}>{CATEGORY_LABELS[item.category]}</Text>
+                );
+              })}
+              {customItems.map((item) => (
+                <View key={item.id} style={st.reviewBlock}>
+                  <View style={st.reviewBlockHeader}>
+                    <Text style={st.reviewBlockLabel}>Custom item</Text>
+                    <Pressable
+                      onPress={() => setCustomItems((prev) => prev.filter((r) => r.id !== item.id))}
+                      style={st.removeBtn}
+                    >
+                      <Text style={st.removeBtnText}>Remove</Text>
+                    </Pressable>
                   </View>
-                  <Pressable
-                    onPress={() =>
-                      setCustomItems((prev) => prev.filter((_, j) => j !== i))
-                    }
-                    style={st.removeBtn}
-                  >
-                    <Text style={st.removeBtnText}>Remove</Text>
-                  </Pressable>
+                  <Text style={st.reviewFieldLabel}>Name</Text>
+                  <TextInput
+                    value={item.name}
+                    onChangeText={(text) => patchCustomItem(item.id, { name: text })}
+                    placeholder="Item name"
+                    placeholderTextColor={palette.muted}
+                    style={st.input}
+                  />
+                  <View style={st.reviewFieldRow}>
+                    <View style={st.reviewFieldCol}>
+                      <Text style={st.reviewFieldLabel}>Color</Text>
+                      <TextInput
+                        value={item.color}
+                        onChangeText={(text) => patchCustomItem(item.id, { color: text })}
+                        placeholder="Color"
+                        placeholderTextColor={palette.muted}
+                        style={st.input}
+                      />
+                    </View>
+                    <View style={st.reviewFieldCol}>
+                      <Text style={st.reviewFieldLabel}>Size</Text>
+                      <TextInput
+                        value={item.size}
+                        onChangeText={(text) => patchCustomItem(item.id, { size: text })}
+                        placeholder="Size"
+                        placeholderTextColor={palette.muted}
+                        style={st.input}
+                      />
+                    </View>
+                  </View>
+                  <Text style={[st.reviewFieldLabel, { marginTop: 8 }]}>Category</Text>
+                  <View style={st.chipRow}>
+                    {CUSTOM_CATEGORIES.map(({ key, label }) => (
+                      <Chip
+                        key={key}
+                        label={label}
+                        active={item.category === key}
+                        onPress={() => patchCustomItem(item.id, { category: key })}
+                      />
+                    ))}
+                  </View>
+                  <Text style={[st.reviewFieldLabel, { marginTop: 8 }]}>Formality</Text>
+                  <View style={st.chipRow}>
+                    {FORMALITY_OPTIONS.map((f) => (
+                      <Chip
+                        key={`${item.id}-${f}`}
+                        label={humanizeEnum(f)}
+                        active={item.formality === f}
+                        onPress={() => patchCustomItem(item.id, { formality: f })}
+                      />
+                    ))}
+                  </View>
+                  <Text style={[st.reviewFieldLabel, { marginTop: 8 }]}>Season</Text>
+                  <View style={st.chipRow}>
+                    {SEASONALITY_OPTIONS.map((s) => (
+                      <Chip
+                        key={`${item.id}-${s}`}
+                        label={humanizeEnum(s)}
+                        active={item.seasonality === s}
+                        onPress={() => patchCustomItem(item.id, { seasonality: s })}
+                      />
+                    ))}
+                  </View>
                 </View>
               ))}
             </View>
@@ -707,13 +1000,58 @@ export function OnboardingFlow({
               returnKeyType="done"
               onSubmitEditing={addCustomItem}
             />
-            <View style={[st.chipRow, { marginTop: 10 }]}>
+            <View style={st.reviewFieldRow}>
+              <View style={st.reviewFieldCol}>
+                <Text style={[st.reviewFieldLabel, { marginTop: 10 }]}>Color</Text>
+                <TextInput
+                  value={customColor}
+                  onChangeText={setCustomColor}
+                  placeholder="Optional"
+                  placeholderTextColor={palette.muted}
+                  style={st.input}
+                />
+              </View>
+              <View style={st.reviewFieldCol}>
+                <Text style={[st.reviewFieldLabel, { marginTop: 10 }]}>Size</Text>
+                <TextInput
+                  value={customSize}
+                  onChangeText={setCustomSize}
+                  placeholder="Optional"
+                  placeholderTextColor={palette.muted}
+                  style={st.input}
+                />
+              </View>
+            </View>
+            <Text style={[st.reviewFieldLabel, { marginTop: 10 }]}>Category</Text>
+            <View style={[st.chipRow, { marginTop: 6 }]}>
               {CUSTOM_CATEGORIES.map(({ key, label }) => (
                 <Chip
                   key={key}
                   label={label}
                   active={customCategory === key}
                   onPress={() => setCustomCategory(key)}
+                />
+              ))}
+            </View>
+            <Text style={[st.reviewFieldLabel, { marginTop: 10 }]}>Formality</Text>
+            <View style={st.chipRow}>
+              {FORMALITY_OPTIONS.map((f) => (
+                <Chip
+                  key={f}
+                  label={humanizeEnum(f)}
+                  active={customFormality === f}
+                  onPress={() => setCustomFormality(f)}
+                />
+              ))}
+            </View>
+            <Text style={[st.reviewFieldLabel, { marginTop: 10 }]}>Season</Text>
+            <View style={st.chipRow}>
+              {SEASONALITY_OPTIONS.map((s) => (
+                <Chip
+                  key={s}
+                  label={humanizeEnum(s)}
+                  active={customSeasonality === s}
+                  onPress={() => setCustomSeasonality(s)}
                 />
               ))}
             </View>
@@ -726,7 +1064,12 @@ export function OnboardingFlow({
           </View>
 
           {saveError ? <Text style={st.errorText}>{saveError}</Text> : null}
-          {isSaving ? (
+          {imageGenProgress ? (
+            <Text style={st.savingHint}>
+              Generating images {imageGenProgress.current} of {imageGenProgress.total}…
+            </Text>
+          ) : null}
+          {isSaving && !imageGenProgress ? (
             <Text style={st.savingHint}>
               Adding items and generating your first outfits...
             </Text>
@@ -975,6 +1318,39 @@ const st = StyleSheet.create({
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: palette.line,
+  },
+  reviewBlock: {
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.line,
+    gap: 4,
+  },
+  reviewBlockHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  reviewBlockLabel: {
+    fontSize: 11,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    color: palette.muted,
+    fontFamily: type.bodyDemi,
+  },
+  reviewFieldLabel: {
+    fontSize: 11,
+    color: palette.muted,
+    fontFamily: type.bodyMedium,
+    marginBottom: 4,
+  },
+  reviewFieldRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
+  },
+  reviewFieldCol: {
+    flex: 1,
   },
   reviewName: {
     fontSize: 14,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from pydantic import HttpUrl
 
 from backend.db import (
     _local_wardrobes,
@@ -19,6 +20,7 @@ from backend.db import (
     _row_to_user_profile,
     _use_local_store,
     count_registered_signups,
+    delete_garment,
     get_user_profile,
     get_wardrobe,
     insert_garment,
@@ -346,3 +348,40 @@ class TestLocalStoreUserProfile:
         p = get_user_profile("u1")
         assert p is not None
         assert p.avatar_config is None
+
+
+def test_delete_garment_invokes_storage_cleanup(monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    assert _use_local_store() is True
+
+    captured: list[list[str]] = []
+
+    def _spy(urls):
+        captured.append([str(u) for u in urls if u])
+
+    monkeypatch.setattr("backend.storage.delete_garment_image_assets", _spy)
+
+    garment = GarmentItem(
+        id="g-del",
+        user_id="u-del",
+        primary_image_url=HttpUrl(
+            "https://proj.supabase.co/storage/v1/object/public/garments/u-del/asset.jpg"
+        ),
+        category=GarmentCategory.DRESS,
+        tags=build_garment_tags(GarmentCategory.DRESS),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    insert_garment(garment)
+    assert delete_garment("g-del", "u-del") is True
+    assert captured == [
+        ["https://proj.supabase.co/storage/v1/object/public/garments/u-del/asset.jpg"]
+    ]
+    assert get_wardrobe("u-del") == []
+
+
+def test_delete_garment_missing_returns_false(monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    assert delete_garment("missing", "u-none") is False

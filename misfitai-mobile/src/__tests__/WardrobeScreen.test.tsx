@@ -12,7 +12,14 @@ jest.mock('../searchOptions', () => ({
   SEARCH_BRANDS: ['Nike'],
   SEARCH_COLORS: ['Black'],
   SEARCH_MATERIALS: ['Cotton'],
-  SEARCH_KINDS_BY_CATEGORY: { top: ['Shirt'] },
+  SEARCH_KINDS_BY_CATEGORY: {
+    top: ['Shirt'],
+    bottom: [],
+    shoes: [],
+    accessory: [],
+    dress: ['Midi dress'],
+    outerwear: ['Coat'],
+  },
 }));
 
 describe('WardrobeScreen', () => {
