@@ -22,10 +22,14 @@ COPY requirements.txt .
 # locally before committing, since torch ABI changes can break ultralytics
 # and open-clip-torch. torch is intentionally absent from requirements.txt
 # so this install is the single authoritative source of the PyTorch wheel.
+# PyTorch index for torch wheels only; PyPI for deps (typing-extensions, etc.).
+# Using the PyTorch index alone breaks on newer pip (rejects mirrored wheels,
+# then fails to build sdist because flit_core is not on the PyTorch index).
 RUN pip install --no-cache-dir \
     "torch==2.5.1" \
     "torchvision==0.20.1" \
-    --index-url https://download.pytorch.org/whl/cpu
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple
 
 # Install the remaining packages (ultralytics, open-clip-torch, rembg, etc.)
 RUN pip install --no-cache-dir -r requirements.txt
