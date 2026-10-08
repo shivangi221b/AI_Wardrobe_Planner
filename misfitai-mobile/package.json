@@ -34,5 +34,8 @@
     "jest-expo": "~55.0.0",
     "typescript": "~5.9.2"
   },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "private": true
 }

@@ -35,21 +35,21 @@ jobs:
     steps:
       # ── 1. Checkout code ─────────────────────────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # ── 2. Authenticate to Google Cloud via Workload Identity Federation ─────
       # No long-lived JSON key is stored anywhere; GCP issues a short-lived
       # access token exchanged for the GitHub OIDC token at runtime.
       - name: Authenticate to Google Cloud
         id: auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       # ── 3. Set up gcloud CLI ──────────────────────────────────────────────────
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
 
       # ── 4. Configure Docker to push to Artifact Registry ─────────────────────
       - name: Configure Docker for Artifact Registry
